@@ -108,6 +108,11 @@ class PIDController:
         self._ki = ki
         self._kd = kd
 
+    def set_output_limits(self, output_min: float | None, output_max: float | None) -> None:
+        """Update output clamp limits live."""
+        self._output_min = output_min
+        self._output_max = output_max
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------

@@ -60,21 +60,16 @@ class ZGCArrayEnableSwitch(SwitchEntity):
         self._attr_unique_id = f"{entry.entry_id}_{array_name}_enabled"
         self._attr_device_info = device
         self._attr_translation_key = "array_enabled"
-        self._is_on: bool = True
 
     @property
     def is_on(self) -> bool:
         array = self._coordinator.get_array(self._array_name)
-        if array is None:
-            return self._is_on
-        return array.enabled
+        return array.enabled if array is not None else True
 
     async def async_turn_on(self, **kwargs) -> None:
         self._coordinator.apply_array_config_update(self._array_name, {"enabled": True})
-        self._is_on = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         self._coordinator.apply_array_config_update(self._array_name, {"enabled": False})
-        self._is_on = False
         self.async_write_ha_state()

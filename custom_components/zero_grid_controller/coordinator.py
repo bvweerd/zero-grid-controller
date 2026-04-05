@@ -194,6 +194,14 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             if name in self._current_setpoints:
                 self._current_setpoints[name] = sp
 
+    def set_ewm_alpha(self, value: float) -> None:
+        """Update the EWM filter smoothing coefficient live."""
+        self._ewm_alpha = value
+
+    def set_deadband(self, value: float) -> None:
+        """Update the deadband threshold live."""
+        self._deadband_w = value
+
     def apply_array_config_update(self, array_name: str, updates: dict) -> None:
         """Live-update a single array's parameters (e.g. from number entity changes)."""
         for array in self._arrays:
@@ -230,29 +238,24 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         # --- 1. Read & normalise grid measurement ---
         raw_w = self._read_grid()
 
-        # --- 2. Optional: subtract battery net power (residual mode) ---
-        if self._measurement_type == "residual" and self._battery_entity:
-            battery_w = self._read_sensor_safe(self._battery_entity, 0.0)
-            raw_w -= battery_w
-
-        # --- 3. EWM low-pass filter ---
+        # --- 2. EWM low-pass filter ---
         self._filtered_w = (
             self._ewm_alpha * raw_w
             + (1.0 - self._ewm_alpha) * self._filtered_w
         )
 
-        # --- 4. Mode guard ---
+        # --- 3. Mode guard ---
         mode = self._resolve_mode()
         if mode == MODE_DISABLED:
             self._pid.reset()
             return self._make_result(raw_w, STATUS_DISABLED)
 
-        # --- 5. Deadband ---
+        # --- 4. Deadband ---
         if abs(self._filtered_w) < self._deadband_w:
             self._pid.freeze_integrator()
             return self._make_result(raw_w, STATUS_DEADBAND)
 
-        # --- 6. Clipping detection ---
+        # --- 5. Clipping detection ---
         battery_clipping = self._detect_battery_clipping()
 
         arrays_with_pv = [a for a in self._arrays if a.pv_power_entity]
@@ -270,24 +273,24 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
         saturation = battery_clipping and not pv_clipping_any and bool(arrays_with_pv)
 
-        # --- 7. PID compute ---
+        # --- 6. PID compute ---
         delta_w = self._pid.compute(self._filtered_w, dt)
 
-        # --- 8. Passive mode: only tighten, never open ---
+        # --- 7. Passive mode: only tighten, never open ---
         if mode == MODE_PASSIVE and delta_w < 0:
             delta_w = 0.0
 
-        # --- 9. Distribute and write setpoints ---
+        # --- 8. Distribute and write setpoints ---
         written = await self._distribute_and_write(delta_w, now)
 
-        # --- 10. Update RLS estimators (one-cycle delay) ---
+        # --- 9. Update RLS estimators (one-cycle delay) ---
         self._update_estimators(written)
 
-        # --- 11. Optional: write battery setpoint ---
+        # --- 10. Optional: write battery setpoint ---
         if self._battery_control_enabled and self._battery_setpoint_entity:
             await self._write_battery_target(raw_w)
 
-        # --- 12. Persist estimator states (fire-and-forget option update) ---
+        # --- 11. Persist estimator states (fire-and-forget option update) ---
         self._persist_estimators()
 
         status = STATUS_SATURATION if saturation else (

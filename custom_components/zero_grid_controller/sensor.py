@@ -7,13 +7,13 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfPower
+from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ARRAY_SUBENTRY_TYPE, DOMAIN
+from .const import ARRAY_SUBENTRY_TYPE, DOMAIN, OUTPUT_TYPE_PERCENT, OUTPUT_TYPE_WATT
 from .coordinator import ZeroGridCoordinator, ZGCResult
 
 _LOGGER = logging.getLogger(__name__)
@@ -247,6 +247,18 @@ class ZGCArraySetpointSensor(ZGCArraySensorBase):
 
     def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo, array_name: str) -> None:
         super().__init__(coordinator, entry, device, "array_setpoint", array_name)
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """Return unit based on the array's output type."""
+        array = self.coordinator.get_array(self._array_name)
+        if array is None:
+            return None
+        if array.output_type == OUTPUT_TYPE_PERCENT:
+            return PERCENTAGE
+        if array.output_type == OUTPUT_TYPE_WATT:
+            return UnitOfPower.WATT
+        return None  # switch type has no numeric unit
 
     @property
     def native_value(self) -> float | None:

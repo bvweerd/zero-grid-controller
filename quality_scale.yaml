@@ -167,8 +167,9 @@ rules:
   entity-device-class:
     status: done
     comment: >
-      SensorDeviceClass.POWER for grid and PID sensors;
-      UnitOfPower.WATT for all power sensors.
+      SensorDeviceClass.POWER for grid and PID sensors (UnitOfPower.WATT).
+      ZGCArraySetpointSensor uses a dynamic unit property: PERCENTAGE for
+      percent-type arrays, UnitOfPower.WATT for watt-type, None for switch-type.
   entity-disabled-by-default:
     status: done
     comment: >

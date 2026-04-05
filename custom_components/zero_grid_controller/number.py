@@ -176,7 +176,7 @@ class ZGCEwmAlphaNumber(ZGCNumberBase):
         super().__init__(coordinator, entry, device, CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA)
 
     async def _on_value_changed(self, value: float) -> None:
-        self._coordinator._ewm_alpha = value
+        self._coordinator.set_ewm_alpha(value)
 
 
 class ZGCDeadbandNumber(ZGCNumberBase):
@@ -188,7 +188,7 @@ class ZGCDeadbandNumber(ZGCNumberBase):
         super().__init__(coordinator, entry, device, CONF_DEADBAND_W, DEFAULT_DEADBAND_W)
 
     async def _on_value_changed(self, value: float) -> None:
-        self._coordinator._deadband_w = value
+        self._coordinator.set_deadband(value)
 
 
 class ZGCOutputMaxNumber(ZGCNumberBase):
@@ -200,8 +200,7 @@ class ZGCOutputMaxNumber(ZGCNumberBase):
         super().__init__(coordinator, entry, device, CONF_OUTPUT_MAX_W, DEFAULT_OUTPUT_MAX_W)
 
     async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid._output_max = value
-        self._coordinator.pid._output_min = -value
+        self._coordinator.pid.set_output_limits(-value, value)
 
 
 # ---------------------------------------------------------------------------
