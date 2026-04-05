@@ -18,6 +18,8 @@ from .const import (
     CONF_BATTERY_CONTROL_ENABLED,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
+    CONF_POWER_CONSUMPTION_SENSORS,
+    CONF_POWER_PRODUCTION_SENSORS,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
     CONF_CALIBRATION_CONFIDENCE,
@@ -231,9 +233,18 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 or not user_input.get(CONF_GRID_SENSOR_EXPORT)
             ):
                 errors["base"] = "split_sensors_required"
+            elif mtype == "computed" and (
+                not user_input.get(CONF_POWER_CONSUMPTION_SENSORS)
+                or not user_input.get(CONF_POWER_PRODUCTION_SENSORS)
+            ):
+                errors["base"] = "computed_sensors_required"
             else:
                 self._data.update(user_input)
                 return await self.async_step_add_array()
+
+        power_sensor_multi = selector(
+            {"entity": {"domain": "sensor", "device_class": "power", "multiple": True}}
+        )
 
         schema = vol.Schema(
             {
@@ -243,21 +254,26 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ): selector(
                     {
                         "select": {
-                            "options": ["net", "split"],
+                            "options": ["net", "split", "computed"],
                             "translation_key": "grid_measurement_type",
                         }
                     }
                 ),
+                # --- net mode ---
                 vol.Optional(CONF_GRID_SENSOR): selector(
                     {"entity": {"domain": "sensor", "device_class": "power"}}
                 ),
                 vol.Optional(CONF_INVERT_SIGN, default=False): bool,
+                # --- split mode ---
                 vol.Optional(CONF_GRID_SENSOR_IMPORT): selector(
                     {"entity": {"domain": "sensor", "device_class": "power"}}
                 ),
                 vol.Optional(CONF_GRID_SENSOR_EXPORT): selector(
                     {"entity": {"domain": "sensor", "device_class": "power"}}
                 ),
+                # --- computed mode ---
+                vol.Optional(CONF_POWER_CONSUMPTION_SENSORS): power_sensor_multi,
+                vol.Optional(CONF_POWER_PRODUCTION_SENSORS): power_sensor_multi,
             }
         )
         return self.async_show_form(

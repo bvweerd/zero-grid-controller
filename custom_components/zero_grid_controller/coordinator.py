@@ -45,6 +45,8 @@ from .const import (
     DEFAULT_KP,
     DEFAULT_OUTPUT_MAX_W,
     DEFAULT_RESPONSE_FACTOR,
+    CONF_POWER_CONSUMPTION_SENSORS,
+    CONF_POWER_PRODUCTION_SENSORS,
     MODE_ACTIVE,
     MODE_DISABLED,
     MODE_PASSIVE,
@@ -133,6 +135,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._grid_export_entity: str | None = data.get(CONF_GRID_SENSOR_EXPORT)
         self._measurement_type: str = data.get(CONF_GRID_MEASUREMENT_TYPE, "net")
         self._invert_sign: bool = bool(data.get(CONF_INVERT_SIGN, False))
+        self._consumption_entities: list[str] = list(data.get(CONF_POWER_CONSUMPTION_SENSORS) or [])
+        self._production_entities: list[str] = list(data.get(CONF_POWER_PRODUCTION_SENSORS) or [])
 
         # Battery config
         self._battery_entity: str | None = data.get(CONF_BATTERY_SENSOR)
@@ -305,6 +309,15 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             import_w = self._read_sensor_safe(self._grid_import_entity or "", 0.0)
             export_w = self._read_sensor_safe(self._grid_export_entity or "", 0.0)
             return import_w - export_w
+
+        if self._measurement_type == "computed":
+            consumption_w = sum(
+                self._read_sensor_safe(e, 0.0) for e in self._consumption_entities
+            )
+            production_w = sum(
+                self._read_sensor_safe(e, 0.0) for e in self._production_entities
+            )
+            return consumption_w - production_w
 
         val = self._read_sensor_safe(self._grid_entity, 0.0)
         return -val if self._invert_sign else val

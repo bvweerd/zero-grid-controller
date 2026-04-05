@@ -10,7 +10,9 @@
           "grid_sensor": "Grid power sensor (positive = importing)",
           "invert_sign": "Invert sign (positive value means exporting)",
           "grid_sensor_import": "Grid import sensor (power drawn from grid)",
-          "grid_sensor_export": "Grid export sensor (power delivered to grid)"
+          "grid_sensor_export": "Grid export sensor (power delivered to grid)",
+          "power_consumption_sensors": "Consumption sensors (one or more)",
+          "power_production_sensors": "Production sensors (one or more, e.g. inverter)"
         }
       },
       "add_array": {
@@ -64,7 +66,8 @@
     },
     "error": {
       "required": "This field is required.",
-      "split_sensors_required": "Both import and export sensors are required for split measurement."
+      "split_sensors_required": "Both import and export sensors are required for split measurement.",
+      "computed_sensors_required": "At least one consumption sensor and one production sensor are required for computed measurement."
     },
     "abort": {
       "already_configured": "Zero Grid Controller is already configured."
@@ -168,7 +171,8 @@
     "grid_measurement_type": {
       "options": {
         "net": "Single net sensor (positive = import or export depending on sign)",
-        "split": "Two separate sensors (import + export)"
+        "split": "Two separate sensors (import + export)",
+        "computed": "Computed: grid = sum(consumption) − sum(production)"
       }
     },
     "output_type": {

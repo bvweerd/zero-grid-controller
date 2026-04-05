@@ -9,8 +9,10 @@ CONF_NAME = "name"
 CONF_GRID_SENSOR = "grid_sensor"
 CONF_GRID_SENSOR_IMPORT = "grid_sensor_import"
 CONF_GRID_SENSOR_EXPORT = "grid_sensor_export"
-CONF_GRID_MEASUREMENT_TYPE = "grid_measurement_type"  # "net" | "split"
+CONF_GRID_MEASUREMENT_TYPE = "grid_measurement_type"  # "net" | "split" | "computed"
 CONF_INVERT_SIGN = "invert_sign"
+CONF_POWER_CONSUMPTION_SENSORS = "power_consumption_sensors"   # list[str], for "computed" type
+CONF_POWER_PRODUCTION_SENSORS = "power_production_sensors"     # list[str], for "computed" type
 
 # Battery config
 CONF_BATTERY_SENSOR = "battery_sensor"
