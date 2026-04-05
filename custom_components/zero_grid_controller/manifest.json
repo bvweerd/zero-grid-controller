@@ -1,0 +1,15 @@
+{
+  "domain": "zero_grid_controller",
+  "name": "Zero Grid Controller",
+  "version": "0.1.0",
+  "config_flow": true,
+  "sub_entries": true,
+  "iot_class": "local_polling",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@bvweerd"],
+  "documentation": "https://github.com/bvweerd/Zero-Grid-Controller",
+  "issue_tracker": "https://github.com/bvweerd/Zero-Grid-Controller/issues",
+  "quality_scale": "bronze",
+  "after_dependencies": ["recorder"]
+}

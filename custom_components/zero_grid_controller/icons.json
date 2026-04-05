@@ -1,0 +1,38 @@
+{
+  "entity": {
+    "sensor": {
+      "grid_raw_w": { "default": "mdi:transmission-tower" },
+      "grid_filtered_w": { "default": "mdi:transmission-tower" },
+      "pid_output_w": { "default": "mdi:tune" },
+      "pid_p_w": { "default": "mdi:alpha-p-circle-outline" },
+      "pid_i_w": { "default": "mdi:alpha-i-circle-outline" },
+      "pid_d_w": { "default": "mdi:alpha-d-circle-outline" },
+      "mode": { "default": "mdi:cog-outline" },
+      "battery_clipping": { "default": "mdi:battery-alert" },
+      "learning_status": { "default": "mdi:robot-outline" },
+      "array_setpoint": { "default": "mdi:solar-power" },
+      "array_clipping": { "default": "mdi:solar-power-variant" },
+      "array_gain_k": { "default": "mdi:chart-line" },
+      "array_calibration": { "default": "mdi:check-decagram-outline" }
+    },
+    "number": {
+      "kp": { "default": "mdi:alpha-p-box-outline" },
+      "ki": { "default": "mdi:alpha-i-box-outline" },
+      "kd": { "default": "mdi:alpha-d-box-outline" },
+      "ewm_alpha": { "default": "mdi:filter-outline" },
+      "deadband_w": { "default": "mdi:sine-wave" },
+      "output_max_w": { "default": "mdi:arrow-up-bold-circle-outline" },
+      "settling_time_s": { "default": "mdi:timer-outline" },
+      "w_per_unit": { "default": "mdi:lightning-bolt" }
+    },
+    "switch": {
+      "array_enabled": { "default": "mdi:power" }
+    }
+  },
+  "services": {
+    "reset_pid": { "service": "mdi:restart" },
+    "recalibrate": { "service": "mdi:chart-scatter-plot" },
+    "set_response_speed": { "service": "mdi:speedometer" },
+    "override_setpoint": { "service": "mdi:hand-pointing-right" }
+  }
+}

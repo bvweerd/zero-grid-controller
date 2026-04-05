@@ -1,0 +1,213 @@
+rules:
+  # Bronze
+  action-setup:
+    status: done
+    comment: >
+      Four service actions registered in __init__.py: reset_pid, recalibrate,
+      set_response_speed, override_setpoint. Defined in services.yaml.
+  appropriate-polling:
+    status: done
+    comment: >
+      DataUpdateCoordinator with a 5-second update interval, appropriate for
+      real-time grid power control.
+  brands:
+    status: todo
+    comment: brands.json not yet submitted to home-assistant/brands.
+  common-modules:
+    status: done
+    comment: >
+      pid.py (PID controller), estimator.py (RLS estimator), array.py
+      (array dataclass), calibrator.py (calibration logic), const.py.
+  config-flow-test-coverage:
+    status: todo
+    comment: Config flow tests not yet written.
+  config-flow:
+    status: done
+    comment: >
+      Wizard-style ConfigFlow with steps: user → add_array → another_array →
+      battery → mode_guard → mode_mapping → done. OptionsFlow with menu:
+      speed / expert / recalibrate. ArraySubEntryFlow with user + reconfigure.
+  dependency-transparency:
+    status: done
+    comment: >
+      requirements: [] — no external PyPI packages. Only stdlib and numpy
+      (bundled with Home Assistant).
+  docs-actions:
+    status: done
+    comment: services.yaml documents all four service actions with fields and examples.
+  docs-high-level-description:
+    status: done
+    comment: README "What does it do?" section.
+  docs-installation-instructions:
+    status: done
+    comment: README "Installation" section with HACS steps.
+  docs-removal-instructions:
+    status: done
+    comment: README "Removal" section.
+  entity-event-setup:
+    status: done
+    comment: >
+      CoordinatorEntity pattern throughout; subscriptions via async_on_remove
+      in async_added_to_hass (inherited from CoordinatorEntity).
+  entity-unique-id:
+    status: done
+    comment: All entities — _attr_unique_id = f"{entry.entry_id}_{key}".
+  has-entity-name:
+    status: done
+    comment: _attr_has_entity_name = True on all entity base classes.
+  runtime-data:
+    status: done
+    comment: entry.runtime_data = ZGCData(...) in async_setup_entry.
+  test-before-configure:
+    status: exempt
+    comment: >
+      No external API or network dependency — integration reads HA sensor
+      states only. No connection test needed before setup.
+  test-before-setup:
+    status: exempt
+    comment: >
+      No external dependency; coordinator reads HA states which are always
+      available. ConfigEntryNotReady not applicable.
+  unique-config-entry:
+    status: done
+    comment: >
+      async_set_unique_id(DOMAIN) + _abort_if_unique_id_configured() in
+      async_step_user.
+
+  # Silver
+  action-exceptions:
+    status: done
+    comment: >
+      Service handlers log errors for invalid inputs (unknown speed, missing
+      array). HomeAssistantError raised for parameter validation.
+  config-entry-unloading:
+    status: done
+    comment: >
+      async_unload_entry calls async_unload_platforms and clears runtime_data.
+  docs-configuration-parameters:
+    status: done
+    comment: README "Configuration" section describes all wizard parameters.
+  docs-installation-parameters:
+    status: done
+    comment: README "Prerequisites" section.
+  entity-unavailable:
+    status: done
+    comment: >
+      CoordinatorEntity automatically marks entities unavailable when
+      last_update_success=False. Sensors return None as native_value when
+      coordinator.data is None.
+  integration-owner:
+    status: done
+    comment: manifest.json codeowners — ["@bvweerd"].
+  log-when-unavailable:
+    status: done
+    comment: >
+      DataUpdateCoordinator built-in log-once: first failure logs at ERROR,
+      subsequent at DEBUG, recovery at INFO.
+  parallel-updates:
+    status: done
+    comment: PARALLEL_UPDATES = 0 in sensor.py, number.py, switch.py.
+  reauthentication-flow:
+    status: exempt
+    comment: No authentication required.
+  test-coverage:
+    status: todo
+    comment: >
+      Unit tests for pid.py and estimator.py written. Integration-level tests
+      for coordinator, config_flow, sensor, number, switch pending.
+
+  # Gold
+  devices:
+    status: done
+    comment: >
+      Main device per config entry; per-array sub-device linked via via_device
+      to the main device.
+  diagnostics:
+    status: done
+    comment: diagnostics.py implements async_get_config_entry_diagnostics.
+  discovery-update-info:
+    status: exempt
+    comment: No discoverable network devices.
+  discovery:
+    status: exempt
+    comment: Integration reads HA sensor states; no device discovery applicable.
+  docs-data-update:
+    status: done
+    comment: README "How does the self-tuning work?" section describes the update cycle.
+  docs-examples:
+    status: done
+    comment: README "FAQ" and "Expert mode" sections with usage examples.
+  docs-known-limitations:
+    status: done
+    comment: README "Frequently asked questions" section covers known edge cases.
+  docs-supported-devices:
+    status: exempt
+    comment: >
+      Software-only integration; works with any inverter controllable via
+      a Home Assistant number or switch entity.
+  docs-supported-functions:
+    status: done
+    comment: README "Entities created" section.
+  docs-troubleshooting:
+    status: done
+    comment: README "Frequently asked questions" section.
+  docs-use-cases:
+    status: done
+    comment: README introduction and "How does the self-tuning work?" section.
+  dynamic-devices:
+    status: done
+    comment: >
+      PV array subentries can be added, edited and removed after initial setup
+      via the ArraySubEntryFlow.
+  entity-category:
+    status: done
+    comment: >
+      EntityCategory.CONFIG for number and switch entities;
+      EntityCategory.DIAGNOSTIC for raw/PID-component sensors.
+  entity-device-class:
+    status: done
+    comment: >
+      SensorDeviceClass.POWER for grid and PID sensors;
+      UnitOfPower.WATT for all power sensors.
+  entity-disabled-by-default:
+    status: done
+    comment: >
+      entity_registry_enabled_default = False on raw grid, PID component,
+      battery_clipping, array_clipping, array_gain_k, array_calibration sensors,
+      and all number entities (shown only in expert mode).
+  entity-translations:
+    status: done
+    comment: >
+      All entities have _attr_translation_key; translations/en.json present.
+  exception-translations:
+    status: todo
+    comment: UpdateFailed calls do not yet use translation_domain/translation_key.
+  icon-translations:
+    status: done
+    comment: icons.json with MDI icons for all entity types and services.
+  reconfiguration-flow:
+    status: done
+    comment: >
+      OptionsFlow for main settings; ArraySubEntryFlow.async_step_reconfigure
+      for per-array reconfiguration.
+  repair-issues:
+    status: todo
+    comment: Repair issues not yet implemented (e.g. grid sensor unavailable).
+  stale-devices:
+    status: done
+    comment: >
+      async_remove_config_entry_device returns True for devices whose subentry
+      no longer exists.
+
+  # Platinum
+  async-dependency:
+    status: done
+    comment: >
+      All I/O is async (hass.services.async_call, hass.states.get).
+      No blocking calls in the event loop.
+  inject-websession:
+    status: exempt
+    comment: No HTTP calls; integration reads local HA states only.
+  strict-typing:
+    status: todo
+    comment: mypy --strict not yet verified; type annotations present throughout.
