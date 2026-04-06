@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from .const import (
+    ARRAY_CLIPPING_THRESHOLD,
     DEFAULT_SETPOINT_MAX,
     DEFAULT_SETPOINT_MIN,
     DEFAULT_SETTLING_TIME_S,
@@ -22,15 +25,15 @@ class ArrayConfig:
 
     name: str
     enabled: bool
-    output_type: str                    # "percent" | "watt" | "switch"
+    output_type: str  # "percent" | "watt" | "switch"
     setpoint_entity: str
     pv_power_entity: str | None
-    w_per_unit: float                   # W per % or W per W (auto-measured or manual)
-    calibration_confidence: str         # "measured" | "estimated" | "failed"
+    w_per_unit: float  # W per % or W per W (auto-measured or manual)
+    calibration_confidence: str  # "measured" | "estimated" | "failed"
     setpoint_min: float
     setpoint_max: float
     settling_time_s: int
-    priority: int                       # 1 = highest priority (served first)
+    priority: int  # 1 = highest priority (served first)
 
     # Switch-specific
     switch_on_threshold_w: float = DEFAULT_SWITCH_ON_THRESHOLD_W
@@ -41,17 +44,16 @@ class ArrayConfig:
     # Convenience methods
     # ------------------------------------------------------------------
 
-    def is_clipping_active(
-        self, current_setpoint_w: float, pv_power_w: float
-    ) -> bool:
+    def is_clipping_active(self, current_setpoint_w: float, pv_power_w: float) -> bool:
         """Return True if our limit is actually constraining the inverter.
 
         Considers clipping active when PV output is within 10% of the applied
         limit — i.e. the inverter is pressing against our ceiling, not a cloud.
         """
         if current_setpoint_w <= 0:
-            return False
-        return pv_power_w >= current_setpoint_w * 0.90
+            # Fully curtailed — we are the constraint, not a cloud
+            return True
+        return pv_power_w >= current_setpoint_w * ARRAY_CLIPPING_THRESHOLD
 
     def headroom_up_w(self, current_setpoint: float) -> float:
         """Watt available to tighten the limit (reduce output)."""
@@ -72,7 +74,9 @@ class ArrayConfig:
         return watts / self.w_per_unit
 
 
-def array_config_from_subentry(subentry_id: str, data: dict) -> ArrayConfig:
+def array_config_from_subentry(
+    subentry_id: str, data: Mapping[str, Any]
+) -> ArrayConfig:
     """Build an ArrayConfig from a subentry data dict."""
     from .const import (
         CONF_ARRAY_NAME,
@@ -108,5 +112,7 @@ def array_config_from_subentry(subentry_id: str, data: dict) -> ArrayConfig:
         switch_off_threshold_w=float(
             data.get(CONF_SWITCH_OFF_THRESHOLD_W, DEFAULT_SWITCH_OFF_THRESHOLD_W)
         ),
-        switch_debounce_s=int(data.get(CONF_SWITCH_DEBOUNCE_S, DEFAULT_SWITCH_DEBOUNCE_S)),
+        switch_debounce_s=int(
+            data.get(CONF_SWITCH_DEBOUNCE_S, DEFAULT_SWITCH_DEBOUNCE_S)
+        ),
     )

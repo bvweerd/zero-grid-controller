@@ -6,25 +6,21 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult, SubentryFlowResult
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.helpers.selector import selector
 
 from .const import (
     ARRAY_SUBENTRY_TYPE,
+    CALIBRATION_CONFIDENCE_ESTIMATED,
     CONF_ARRAY_NAME,
     CONF_BATTERY_CONTROL_ENABLED,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
-    CONF_POWER_CONSUMPTION_SENSORS,
-    CONF_POWER_PRODUCTION_SENSORS,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
     CONF_CALIBRATION_CONFIDENCE,
-    CONF_DEADBAND_W,
-    CONF_EWM_ALPHA,
     CONF_EXPERT_MODE,
     CONF_GRID_MEASUREMENT_TYPE,
     CONF_GRID_SENSOR,
@@ -32,15 +28,13 @@ from .const import (
     CONF_GRID_SENSOR_IMPORT,
     CONF_INVERT_SIGN,
     CONF_INVERTER_SPEED,
-    CONF_KD,
-    CONF_KI,
-    CONF_KP,
     CONF_MODE_GUARD_ENABLED,
     CONF_MODE_GUARD_ENTITY,
     CONF_MODE_GUARD_MAPPING,
     CONF_NAME,
-    CONF_OUTPUT_MAX_W,
     CONF_OUTPUT_TYPE,
+    CONF_POWER_CONSUMPTION_SENSORS,
+    CONF_POWER_PRODUCTION_SENSORS,
     CONF_PRIORITY,
     CONF_PV_POWER_ENTITY,
     CONF_RESPONSE_FACTOR,
@@ -49,12 +43,8 @@ from .const import (
     CONF_SETPOINT_MIN,
     CONF_SETTLING_TIME_S,
     CONF_W_PER_UNIT,
-    DEFAULT_DEADBAND_W,
-    DEFAULT_EWM_ALPHA,
-    DEFAULT_KD,
-    DEFAULT_KI,
-    DEFAULT_KP,
-    DEFAULT_OUTPUT_MAX_W,
+    DEFAULT_BATTERY_MAX_CHARGE_W,
+    DEFAULT_PRIORITY,
     DEFAULT_RESPONSE_FACTOR,
     DEFAULT_SETPOINT_MAX,
     DEFAULT_SETPOINT_MIN,
@@ -74,6 +64,7 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Array subentry flow
 # ---------------------------------------------------------------------------
+
 
 class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
     """Flow for adding or editing a PV array subentry."""
@@ -120,7 +111,7 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
         )
 
 
-def _array_schema(defaults: dict | None = None) -> vol.Schema:
+def _array_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     d = defaults or {}
     return vol.Schema(
         {
@@ -138,7 +129,11 @@ def _array_schema(defaults: dict | None = None) -> vol.Schema:
             ): selector(
                 {
                     "select": {
-                        "options": [OUTPUT_TYPE_PERCENT, OUTPUT_TYPE_WATT, OUTPUT_TYPE_SWITCH],
+                        "options": [
+                            OUTPUT_TYPE_PERCENT,
+                            OUTPUT_TYPE_WATT,
+                            OUTPUT_TYPE_SWITCH,
+                        ],
                         "translation_key": "output_type",
                     }
                 }
@@ -168,7 +163,7 @@ def _array_schema(defaults: dict | None = None) -> vol.Schema:
             ): vol.All(vol.Coerce(float), vol.Range(min=1)),
             vol.Optional(
                 CONF_PRIORITY,
-                default=d.get(CONF_PRIORITY, 1),
+                default=d.get(CONF_PRIORITY, DEFAULT_PRIORITY),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
         }
     )
@@ -183,11 +178,17 @@ def _build_array_data(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_OUTPUT_TYPE: user_input.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT),
         CONF_INVERTER_SPEED: speed,
         CONF_SETTLING_TIME_S: settling_time_s,
-        CONF_SETPOINT_MIN: float(user_input.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN)),
-        CONF_SETPOINT_MAX: float(user_input.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)),
-        CONF_PRIORITY: int(user_input.get(CONF_PRIORITY, 1)),
+        CONF_SETPOINT_MIN: float(
+            user_input.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN)
+        ),
+        CONF_SETPOINT_MAX: float(
+            user_input.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)
+        ),
+        CONF_PRIORITY: int(user_input.get(CONF_PRIORITY, DEFAULT_PRIORITY)),
         CONF_W_PER_UNIT: float(user_input.get(CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT)),
-        CONF_CALIBRATION_CONFIDENCE: user_input.get(CONF_CALIBRATION_CONFIDENCE, "estimated"),
+        CONF_CALIBRATION_CONFIDENCE: user_input.get(
+            CONF_CALIBRATION_CONFIDENCE, CALIBRATION_CONFIDENCE_ESTIMATED
+        ),
         "enabled": True,
     }
     if pv := user_input.get(CONF_PV_POWER_ENTITY):
@@ -199,6 +200,7 @@ def _build_array_data(user_input: dict[str, Any]) -> dict[str, Any]:
 # Main config flow
 # ---------------------------------------------------------------------------
 
+
 class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Wizard-style config flow for Zero Grid Controller."""
 
@@ -206,7 +208,6 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
-        self._arrays: list[dict[str, Any]] = []
         self._mode_guard_states: list[str] = []
 
     @classmethod
@@ -240,7 +241,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "computed_sensors_required"
             else:
                 self._data.update(user_input)
-                return await self.async_step_add_array()
+                return await self.async_step_battery()
 
         power_sensor_multi = selector(
             {"entity": {"domain": "sensor", "device_class": "power", "multiple": True}}
@@ -249,9 +250,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_NAME, default="Zero Grid Controller"): str,
-                vol.Required(
-                    CONF_GRID_MEASUREMENT_TYPE, default="net"
-                ): selector(
+                vol.Required(CONF_GRID_MEASUREMENT_TYPE, default="net"): selector(
                     {
                         "select": {
                             "options": ["net", "split", "computed"],
@@ -276,42 +275,9 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_POWER_PRODUCTION_SENSORS): power_sensor_multi,
             }
         )
-        return self.async_show_form(
-            step_id="user", data_schema=schema, errors=errors
-        )
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    # --- Step 2: Add first array ---
-    async def async_step_add_array(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            self._arrays.append(_build_array_data(user_input))
-            return await self.async_step_another_array()
-
-        return self.async_show_form(
-            step_id="add_array",
-            data_schema=_array_schema(),
-            errors=errors,
-        )
-
-    # --- Step 2b: Another array? ---
-    async def async_step_another_array(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None:
-            if user_input.get("add_another"):
-                return await self.async_step_add_array()
-            return await self.async_step_battery()
-
-        return self.async_show_form(
-            step_id="another_array",
-            data_schema=vol.Schema(
-                {vol.Required("add_another", default=False): bool}
-            ),
-        )
-
-    # --- Step 3: Battery ---
+    # --- Step 2: Battery ---
     async def async_step_battery(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -329,15 +295,14 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_BATTERY_SENSOR): selector(
                         {"entity": {"domain": "sensor", "device_class": "power"}}
                     ),
-                    vol.Optional(CONF_BATTERY_MAX_CHARGE_W, default=5000): vol.All(
-                        vol.Coerce(float), vol.Range(min=100, max=50000)
-                    ),
-                    vol.Optional(CONF_BATTERY_MAX_DISCHARGE_W, default=5000): vol.All(
-                        vol.Coerce(float), vol.Range(min=100, max=50000)
-                    ),
                     vol.Optional(
-                        CONF_BATTERY_CONTROL_ENABLED, default=False
-                    ): bool,
+                        CONF_BATTERY_MAX_CHARGE_W, default=DEFAULT_BATTERY_MAX_CHARGE_W
+                    ): vol.All(vol.Coerce(float), vol.Range(min=100, max=50000)),
+                    vol.Optional(
+                        CONF_BATTERY_MAX_DISCHARGE_W,
+                        default=DEFAULT_BATTERY_MAX_CHARGE_W,
+                    ): vol.All(vol.Coerce(float), vol.Range(min=100, max=50000)),
+                    vol.Optional(CONF_BATTERY_CONTROL_ENABLED, default=False): bool,
                     vol.Optional(CONF_BATTERY_SETPOINT_ENTITY): selector(
                         {"entity": {"domain": ["number", "input_number"]}}
                     ),
@@ -352,7 +317,9 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             if user_input.get(CONF_MODE_GUARD_ENABLED):
                 self._data[CONF_MODE_GUARD_ENABLED] = True
-                self._data[CONF_MODE_GUARD_ENTITY] = user_input.get(CONF_MODE_GUARD_ENTITY)
+                self._data[CONF_MODE_GUARD_ENTITY] = user_input.get(
+                    CONF_MODE_GUARD_ENTITY
+                )
                 # Read current states from that entity for mapping
                 entity_id = user_input.get(CONF_MODE_GUARD_ENTITY, "")
                 state = self.hass.states.get(entity_id)
@@ -389,7 +356,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not self._mode_guard_states:
             return await self.async_step_done()
 
-        schema_dict: dict = {}
+        schema_dict: dict[Any, Any] = {}
         for state_val in self._mode_guard_states:
             schema_dict[
                 vol.Required(
@@ -411,12 +378,10 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(schema_dict),
         )
 
-    # --- Step 6: Done ---
+    # --- Step 4c: Done ---
     async def async_step_done(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        # Store array configs in data
-        self._data["arrays"] = self._arrays
         title = self._data.get(CONF_NAME, "Zero Grid Controller")
         return self.async_create_entry(title=title, data=self._data)
 
@@ -428,7 +393,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> "ZeroGridOptionsFlow":
+    ) -> ZeroGridOptionsFlow:
         return ZeroGridOptionsFlow()
 
 
@@ -453,7 +418,9 @@ class ZeroGridOptionsFlow(config_entries.OptionsFlow):
                 data={**self.config_entry.options, CONF_RESPONSE_FACTOR: factor}
             )
 
-        current_factor = self.config_entry.options.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR)
+        current_factor = self.config_entry.options.get(
+            CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR
+        )
         # Map factor back to name
         current_speed = "normal"
         for name, factor in RESPONSE_FACTORS.items():
@@ -482,7 +449,10 @@ class ZeroGridOptionsFlow(config_entries.OptionsFlow):
     ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(
-                data={**self.config_entry.options, CONF_EXPERT_MODE: user_input.get(CONF_EXPERT_MODE, False)}
+                data={
+                    **self.config_entry.options,
+                    CONF_EXPERT_MODE: user_input.get(CONF_EXPERT_MODE, False),
+                }
             )
 
         return self.async_show_form(

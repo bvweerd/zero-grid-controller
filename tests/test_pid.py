@@ -1,10 +1,7 @@
 """Unit tests for the PID controller."""
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pytest
+
 from custom_components.zero_grid_controller.pid import PIDController
 
 
@@ -27,7 +24,9 @@ class TestAntiWindup:
     def test_integrator_does_not_windup_when_clamped(self):
         """Integrator must not accumulate when output is at the clamp limit."""
         pid = PIDController(
-            kp=1.0, ki=10.0, kd=0.0,
+            kp=1.0,
+            ki=10.0,
+            kd=0.0,
             setpoint=0.0,
             output_min=-5.0,
             output_max=5.0,
@@ -46,7 +45,9 @@ class TestAntiWindup:
     def test_integrator_accumulates_when_not_clamped(self):
         """When output is not clamped, the integrator should accumulate normally."""
         pid = PIDController(
-            kp=0.0, ki=1.0, kd=0.0,
+            kp=0.0,
+            ki=1.0,
+            kd=0.0,
             setpoint=0.0,
             output_min=-10000.0,
             output_max=10000.0,
@@ -59,7 +60,9 @@ class TestAntiWindup:
     def test_anti_windup_allows_integration_when_pulling_back(self):
         """When clamped at min and error is positive (pulling back), integration IS allowed."""
         pid = PIDController(
-            kp=0.0, ki=1.0, kd=0.0,
+            kp=0.0,
+            ki=1.0,
+            kd=0.0,
             setpoint=0.0,
             output_min=-5.0,
             output_max=5.0,
@@ -149,7 +152,9 @@ class TestComponents:
     def test_components_sum_to_output(self):
         """P + I + D should approximately equal the unclamped output."""
         pid = PIDController(
-            kp=1.0, ki=0.5, kd=0.1,
+            kp=1.0,
+            ki=0.5,
+            kd=0.1,
             setpoint=0.0,
             output_min=-1000.0,
             output_max=1000.0,
@@ -171,3 +176,30 @@ class TestOutputClamping:
         pid = PIDController(kp=100.0, ki=0.0, kd=0.0, setpoint=0.0, output_min=-50.0)
         out = pid.compute(measurement=10.0, dt=1.0)
         assert out >= -50.0
+
+
+class TestEdgeCases:
+    def test_dt_zero_uses_fallback(self):
+        """When dt <= 0, compute uses dt=0.1 to avoid division by zero."""
+        pid = PIDController(kp=1.0, ki=0.0, kd=1.0, setpoint=0.0)
+        # First call to set prev_error
+        pid.compute(measurement=0.0, dt=1.0)
+        # Second call with dt=0 — should use fallback 0.1
+        out = pid.compute(measurement=1.0, dt=0.0)
+        # With dt=0.1 and kd=1: d_error = (0 - 1) / 0.1 = -10 → D = -10
+        # P = -1; D = -10; I = 0
+        assert out == pytest.approx(-11.0, abs=0.1)
+
+    def test_set_output_limits(self):
+        """set_output_limits updates the clamp bounds live."""
+        pid = PIDController(
+            kp=100.0,
+            ki=0.0,
+            kd=0.0,
+            setpoint=0.0,
+            output_min=-1000.0,
+            output_max=1000.0,
+        )
+        pid.set_output_limits(-10.0, 10.0)
+        out = pid.compute(measurement=-100.0, dt=1.0)
+        assert out == pytest.approx(10.0, abs=0.01)

@@ -6,24 +6,36 @@ import asyncio
 import logging
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from homeassistant.core import HomeAssistant
 
 from .array import ArrayConfig
+from .const import (
+    CALIB_BASELINE_SAMPLES,
+    CALIB_DEFAULT_FAIL_SETTLING_S,
+    CALIB_GRID_VARIANCE_FACTOR,
+    CALIB_INTER_ARRAY_SLEEP_S,
+    CALIB_MAX_GRID_W,
+    CALIB_MAX_TIME_S,
+    CALIB_MIN_PV_W,
+    CALIB_MIN_W_PER_UNIT,
+    CALIB_SETTLING_CONFIRM_COUNT,
+    CALIB_SETTLING_MAX_S,
+    CALIB_SETTLING_MIN_S,
+    CALIB_SETTLING_THRESHOLD_W,
+    CALIB_STABLE_VARIANCE_PCT,
+    CALIB_STABLE_WINDOW_S,
+    CALIB_STEP_MAX,
+    CALIB_STEP_MIN,
+    CALIB_STEP_RATIO,
+    CALIBRATION_CONFIDENCE_ESTIMATED,
+    DEFAULT_SETTLING_TIME_S,
+    DEFAULT_W_PER_UNIT,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-# Safety limits
-_MAX_GRID_W = 3000.0
-_MAX_CALIBRATION_S = 180  # 3 minutes per array
-_STABLE_VARIANCE_PCT = 5.0
-_STABLE_WINDOW_S = 30
-_BASELINE_SAMPLES = 10
-_SETTLING_CONFIRM_COUNT = 3
-_SETTLING_THRESHOLD_W = 5.0
-_STEP_SIZE = 10  # units (% or W)
 
 
 @dataclass
@@ -32,8 +44,8 @@ class CalibrationResult:
 
     w_per_unit: float
     settling_time_s: int
-    confidence: str    # "measured" | "estimated" | "failed"
-    notes: str         # human-readable explanation for the user
+    confidence: str  # "measured" | "estimated" | "failed"
+    notes: str  # human-readable explanation for the user
 
 
 class ArrayCalibrator:
@@ -92,7 +104,7 @@ class ArrayCalibrator:
                 array,
                 grid_entity,
                 invert_sign,
-                lambda msg, p: progress_callback(msg, base_progress + p / n),
+                lambda msg, p, bp=base_progress: progress_callback(msg, bp + p / n),  # type: ignore[misc]
             )
             results[array.name] = result
             _LOGGER.info(
@@ -106,7 +118,7 @@ class ArrayCalibrator:
 
             # Wait before next array to let grid stabilise
             if i < n - 1 and not self._abort:
-                await asyncio.sleep(30)
+                await asyncio.sleep(CALIB_INTER_ARRAY_SLEEP_S)
 
         progress_callback("calibration_complete", 1.0)
         return results
@@ -125,9 +137,9 @@ class ArrayCalibrator:
     ) -> CalibrationResult:
         """Calibrate a single array. Returns a CalibrationResult."""
         default = CalibrationResult(
-            w_per_unit=10.0,
-            settling_time_s=15,
-            confidence="estimated",
+            w_per_unit=DEFAULT_W_PER_UNIT,
+            settling_time_s=DEFAULT_SETTLING_TIME_S,
+            confidence=CALIBRATION_CONFIDENCE_ESTIMATED,
             notes="Using default values (calibration not run or insufficient solar output).",
         )
 
@@ -136,8 +148,8 @@ class ArrayCalibrator:
         stable = await self._wait_for_stable(hass, array, grid_entity, invert_sign)
         if not stable:
             return CalibrationResult(
-                w_per_unit=10.0,
-                settling_time_s=15,
+                w_per_unit=DEFAULT_W_PER_UNIT,
+                settling_time_s=DEFAULT_SETTLING_TIME_S,
                 confidence="failed",
                 notes=(
                     "Calibration not possible (insufficient or unstable solar output). "
@@ -154,21 +166,25 @@ class ArrayCalibrator:
         # --- Step 3: measure baseline grid_w ---
         progress_callback("calibration_measuring_baseline", 0.1)
         baseline = await self._measure_grid_avg(
-            hass, grid_entity, invert_sign, samples=_BASELINE_SAMPLES
+            hass, grid_entity, invert_sign, samples=CALIB_BASELINE_SAMPLES
         )
         if baseline is None:
             return default
 
-        # --- Step 4: compute test step (tighten limit by STEP_SIZE) ---
+        # --- Step 4: compute test step — adaptive: 10 % of usable range, min 2, max 20 units ---
+        usable_range = array.setpoint_max - array.setpoint_min
+        step = max(
+            CALIB_STEP_MIN, min(CALIB_STEP_MAX, int(usable_range * CALIB_STEP_RATIO))
+        )
         test_setpoint = max(
             array.setpoint_min,
-            min(array.setpoint_max, original_setpoint - _STEP_SIZE),
+            min(array.setpoint_max, original_setpoint - step),
         )
         if abs(test_setpoint - original_setpoint) < 1:
-            # No room to step — try opening instead
+            # No room to tighten — try opening instead
             test_setpoint = min(
                 array.setpoint_max,
-                max(array.setpoint_min, original_setpoint + _STEP_SIZE),
+                max(array.setpoint_min, original_setpoint + step),
             )
         if abs(test_setpoint - original_setpoint) < 1:
             _LOGGER.warning(
@@ -187,19 +203,19 @@ class ArrayCalibrator:
 
         # --- Step 5: measure response ---
         start_t = time.monotonic()
-        recent: deque[float] = deque(maxlen=_SETTLING_CONFIRM_COUNT)
+        recent: deque[float] = deque(maxlen=CALIB_SETTLING_CONFIRM_COUNT)
         settled = False
         new_baseline = baseline
         elapsed = 0.0
 
-        while elapsed < _MAX_CALIBRATION_S and not self._abort:
+        while elapsed < CALIB_MAX_TIME_S and not self._abort:
             await asyncio.sleep(1.0)
             elapsed = time.monotonic() - start_t
             grid_w = self._read_grid(hass, grid_entity, invert_sign)
             if grid_w is None:
                 continue
 
-            if abs(grid_w) > _MAX_GRID_W:
+            if abs(grid_w) > CALIB_MAX_GRID_W:
                 _LOGGER.warning(
                     "Grid measurement %.0f W exceeds safety limit; aborting calibration for %s",
                     grid_w,
@@ -209,32 +225,40 @@ class ArrayCalibrator:
                 return default
 
             recent.append(grid_w)
-            if len(recent) == _SETTLING_CONFIRM_COUNT:
+            # Only start checking after the inverter settling time has elapsed
+            if (
+                elapsed >= array.settling_time_s
+                and len(recent) == CALIB_SETTLING_CONFIRM_COUNT
+            ):
                 avg = sum(recent) / len(recent)
-                if all(abs(v - avg) < _SETTLING_THRESHOLD_W for v in recent):
+                if all(abs(v - avg) < CALIB_SETTLING_THRESHOLD_W for v in recent):
                     new_baseline = avg
                     settled = True
                     break
 
-            progress_callback("calibration_step_sent", 0.3 + 0.6 * (elapsed / _MAX_CALIBRATION_S))
+            progress_callback(
+                "calibration_step_sent", 0.3 + 0.6 * (elapsed / CALIB_MAX_TIME_S)
+            )
 
         # --- Step 6: restore and compute results ---
         await self._write_setpoint(hass, array, original_setpoint)
 
         if not settled:
             return CalibrationResult(
-                w_per_unit=10.0,
-                settling_time_s=30,
+                w_per_unit=DEFAULT_W_PER_UNIT,
+                settling_time_s=CALIB_DEFAULT_FAIL_SETTLING_S,
                 confidence="failed",
                 notes=f"{array.name}: no response detected, using default values.",
             )
 
         w_per_unit = abs(new_baseline - baseline) / step_size
-        settling_time_s = max(3, min(60, int(elapsed)))
+        settling_time_s = max(
+            CALIB_SETTLING_MIN_S, min(CALIB_SETTLING_MAX_S, int(elapsed))
+        )
 
-        if w_per_unit < 0.5:
+        if w_per_unit < CALIB_MIN_W_PER_UNIT:
             return CalibrationResult(
-                w_per_unit=10.0,
+                w_per_unit=DEFAULT_W_PER_UNIT,
                 settling_time_s=settling_time_s,
                 confidence="failed",
                 notes=f"{array.name}: response too small to measure reliably.",
@@ -263,12 +287,24 @@ class ArrayCalibrator:
         Returns True if conditions are suitable for calibration.
         """
         if array.pv_power_entity is None:
-            # No PV sensor — just wait 30 s and proceed
-            await asyncio.sleep(_STABLE_WINDOW_S)
-            return True
+            # No PV sensor — check grid stability instead of blindly waiting
+            grid_samples: deque[float] = deque(maxlen=CALIB_STABLE_WINDOW_S)
+            for _ in range(CALIB_STABLE_WINDOW_S):
+                val = self._read_grid(hass, grid_entity, invert_sign)
+                if val is not None:
+                    grid_samples.append(val)
+                await asyncio.sleep(1.0)
+            if len(grid_samples) < CALIB_STABLE_WINDOW_S // 2:
+                return False
+            avg = sum(grid_samples) / len(grid_samples)
+            variance_pct = (
+                (max(grid_samples) - min(grid_samples)) / max(abs(avg), 1.0) * 100
+            )
+            # Grid is inherently noisier than PV; allow CALIB_GRID_VARIANCE_FACTOR× the PV variance threshold
+            return variance_pct < CALIB_STABLE_VARIANCE_PCT * CALIB_GRID_VARIANCE_FACTOR
 
-        samples: deque[float] = deque(maxlen=_STABLE_WINDOW_S)
-        deadline = time.monotonic() + _STABLE_WINDOW_S * 2
+        samples: deque[float] = deque(maxlen=CALIB_STABLE_WINDOW_S)
+        deadline = time.monotonic() + CALIB_STABLE_WINDOW_S * 2
 
         while time.monotonic() < deadline:
             state = hass.states.get(array.pv_power_entity)
@@ -279,19 +315,17 @@ class ArrayCalibrator:
                 except ValueError:
                     pass
 
-            if len(samples) >= _STABLE_WINDOW_S:
+            if len(samples) >= CALIB_STABLE_WINDOW_S:
                 avg = sum(samples) / len(samples)
-                if avg < 100:
+                if avg < CALIB_MIN_PV_W:
                     return False  # Not enough sun
-                variance_pct = (
-                    max(samples) - min(samples)
-                ) / avg * 100
-                if variance_pct < _STABLE_VARIANCE_PCT:
+                variance_pct = (max(samples) - min(samples)) / avg * 100
+                if variance_pct < CALIB_STABLE_VARIANCE_PCT:
                     return True
 
             await asyncio.sleep(1.0)
 
-        return len(samples) >= _STABLE_WINDOW_S // 2
+        return len(samples) >= CALIB_STABLE_WINDOW_S // 2
 
     async def _measure_grid_avg(
         self,
@@ -326,9 +360,7 @@ class ArrayCalibrator:
         except ValueError:
             return None
 
-    def _read_setpoint(
-        self, hass: HomeAssistant, array: ArrayConfig
-    ) -> float | None:
+    def _read_setpoint(self, hass: HomeAssistant, array: ArrayConfig) -> float | None:
         state = hass.states.get(array.setpoint_entity)
         if state is None or state.state in ("unknown", "unavailable"):
             return None
@@ -342,6 +374,7 @@ class ArrayCalibrator:
     ) -> None:
         """Write a new setpoint to the inverter entity."""
         from homeassistant.const import ATTR_ENTITY_ID
+
         from .const import OUTPUT_TYPE_SWITCH
 
         if array.output_type == OUTPUT_TYPE_SWITCH:

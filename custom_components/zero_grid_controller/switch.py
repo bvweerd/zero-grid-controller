@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -11,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import ARRAY_SUBENTRY_TYPE, DOMAIN
+from .const import ARRAY_SUBENTRY_TYPE
 from .coordinator import ZeroGridCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,10 +67,12 @@ class ZGCArrayEnableSwitch(SwitchEntity):
         array = self._coordinator.get_array(self._array_name)
         return array.enabled if array is not None else True
 
-    async def async_turn_on(self, **kwargs) -> None:
+    async def async_turn_on(self, **kwargs: Any) -> None:
         self._coordinator.apply_array_config_update(self._array_name, {"enabled": True})
         self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs) -> None:
-        self._coordinator.apply_array_config_update(self._array_name, {"enabled": False})
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._coordinator.apply_array_config_update(
+            self._array_name, {"enabled": False}
+        )
         self.async_write_ha_state()

@@ -6,7 +6,6 @@ via a self-tuning PID controller with online RLS parameter estimation.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -14,9 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -28,11 +25,11 @@ from .const import (
     CONF_NAME,
     DOMAIN,
     PLATFORMS,
+    RESPONSE_FACTORS,
     SERVICE_OVERRIDE_SETPOINT,
     SERVICE_RECALIBRATE,
     SERVICE_RESET_PID,
     SERVICE_SET_RESPONSE_SPEED,
-    RESPONSE_FACTORS,
 )
 from .coordinator import ZeroGridCoordinator
 
@@ -112,6 +109,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         entry.runtime_data = None
+        remaining = hass.config_entries.async_entries(DOMAIN)
+        if not any(e.entry_id != entry.entry_id for e in remaining):
+            for service in (
+                SERVICE_RESET_PID,
+                SERVICE_RECALIBRATE,
+                SERVICE_SET_RESPONSE_SPEED,
+                SERVICE_OVERRIDE_SETPOINT,
+            ):
+                hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
 
@@ -168,19 +174,22 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
             coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
             arrays = [
-                a for a in coordinator.arrays
+                a
+                for a in coordinator.arrays
                 if array_name is None or a.name == array_name
             ]
             if not arrays:
                 continue
             calibrator = ArrayCalibrator()
-            asyncio.create_task(
+            hass.async_create_task(
                 calibrator.run(
                     hass,
                     arrays,
-                    coordinator._grid_entity,
-                    coordinator._invert_sign,
-                    lambda msg, pct: _LOGGER.debug("Calibration: %s (%.0f%%)", msg, pct * 100),
+                    coordinator.grid_entity,
+                    coordinator.invert_sign,
+                    lambda msg, pct: _LOGGER.debug(
+                        "Calibration: %s (%.0f%%)", msg, pct * 100
+                    ),
                 )
             )
 

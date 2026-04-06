@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import time
@@ -17,13 +18,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .array import ArrayConfig, array_config_from_subentry
 from .const import (
     ARRAY_SUBENTRY_TYPE,
+    BATTERY_CLIPPING_THRESHOLD,
     CONF_BATTERY_CONTROL_ENABLED,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
     CONF_DEADBAND_W,
-    CONF_EWM_ALPHA,
     CONF_ESTIMATOR_STATE,
+    CONF_EWM_ALPHA,
     CONF_EXPERT_MODE,
     CONF_GRID_MEASUREMENT_TYPE,
     CONF_GRID_SENSOR,
@@ -37,7 +39,13 @@ from .const import (
     CONF_MODE_GUARD_ENTITY,
     CONF_MODE_GUARD_MAPPING,
     CONF_OUTPUT_MAX_W,
+    CONF_POWER_CONSUMPTION_SENSORS,
+    CONF_POWER_PRODUCTION_SENSORS,
     CONF_RESPONSE_FACTOR,
+    CONTROL_DT_MAX,
+    CONTROL_DT_MIN,
+    CONTROL_INTERVAL_S,
+    DEFAULT_BATTERY_MAX_CHARGE_W,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_KD,
@@ -45,8 +53,8 @@ from .const import (
     DEFAULT_KP,
     DEFAULT_OUTPUT_MAX_W,
     DEFAULT_RESPONSE_FACTOR,
-    CONF_POWER_CONSUMPTION_SENSORS,
-    CONF_POWER_PRODUCTION_SENSORS,
+    DEFAULT_SETTLING_TIME_S,
+    DOMAIN,
     MODE_ACTIVE,
     MODE_DISABLED,
     MODE_PASSIVE,
@@ -60,6 +68,7 @@ from .const import (
 )
 from .estimator import RLSEstimator
 from .pid import PIDController
+from .repairs import dismiss_grid_sensor_unavailable, raise_grid_sensor_unavailable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,7 +105,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        update_interval_s: int = 5,
+        update_interval_s: int = CONTROL_INTERVAL_S,
     ) -> None:
         super().__init__(
             hass,
@@ -119,14 +128,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         output_max = float(data.get(CONF_OUTPUT_MAX_W, DEFAULT_OUTPUT_MAX_W))
 
         self._pid = PIDController(
-            kp, ki, kd,
+            kp,
+            ki,
+            kd,
             setpoint=0.0,
             output_min=-output_max,
             output_max=output_max,
         )
         self._ewm_alpha = float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
         self._deadband_w = float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
-        self._response_factor = float(data.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR))
+        self._response_factor = float(
+            data.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR)
+        )
         self._expert_mode: bool = bool(data.get(CONF_EXPERT_MODE, False))
 
         # Grid measurement config
@@ -135,14 +148,24 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._grid_export_entity: str | None = data.get(CONF_GRID_SENSOR_EXPORT)
         self._measurement_type: str = data.get(CONF_GRID_MEASUREMENT_TYPE, "net")
         self._invert_sign: bool = bool(data.get(CONF_INVERT_SIGN, False))
-        self._consumption_entities: list[str] = list(data.get(CONF_POWER_CONSUMPTION_SENSORS) or [])
-        self._production_entities: list[str] = list(data.get(CONF_POWER_PRODUCTION_SENSORS) or [])
+        self._consumption_entities: list[str] = list(
+            data.get(CONF_POWER_CONSUMPTION_SENSORS) or []
+        )
+        self._production_entities: list[str] = list(
+            data.get(CONF_POWER_PRODUCTION_SENSORS) or []
+        )
 
         # Battery config
         self._battery_entity: str | None = data.get(CONF_BATTERY_SENSOR)
-        self._battery_max_charge_w: float = float(data.get(CONF_BATTERY_MAX_CHARGE_W, 5000.0))
-        self._battery_control_enabled: bool = bool(data.get(CONF_BATTERY_CONTROL_ENABLED, False))
-        self._battery_setpoint_entity: str | None = data.get(CONF_BATTERY_SETPOINT_ENTITY)
+        self._battery_max_charge_w: float = float(
+            data.get(CONF_BATTERY_MAX_CHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W)
+        )
+        self._battery_control_enabled: bool = bool(
+            data.get(CONF_BATTERY_CONTROL_ENABLED, False)
+        )
+        self._battery_setpoint_entity: str | None = data.get(
+            CONF_BATTERY_SETPOINT_ENTITY
+        )
 
         # Mode guard config
         self._mode_guard_enabled: bool = bool(data.get(CONF_MODE_GUARD_ENABLED, False))
@@ -151,7 +174,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
         # Arrays from subentries
         self._arrays: list[ArrayConfig] = [
-            array_config_from_subentry(s.subentry_id, s.data)
+            array_config_from_subentry(s.subentry_id, dict(s.data))
             for s in entry.subentries.values()
             if s.subentry_type == ARRAY_SUBENTRY_TYPE
         ]
@@ -164,26 +187,23 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         for array in self._arrays:
             self._current_setpoints.setdefault(array.name, array.setpoint_max)
 
-        # Estimators: restore or create fresh
+        # Estimators: restore saved state or create fresh
         saved: dict[str, Any] = data.get(CONF_ESTIMATOR_STATE, {})
         self._estimators: dict[str, RLSEstimator] = {}
         for array in self._arrays:
+            restored = None
             if array.name in saved:
-                try:
-                    self._estimators[array.name] = RLSEstimator.from_dict(
-                        saved[array.name]
-                    )
-                except (KeyError, TypeError):
-                    self._estimators[array.name] = RLSEstimator(
-                        settling_time_s=array.settling_time_s
-                    )
-            else:
-                self._estimators[array.name] = RLSEstimator(
-                    settling_time_s=array.settling_time_s
-                )
+                with contextlib.suppress(KeyError, TypeError):
+                    restored = RLSEstimator.from_dict(saved[array.name])
+            self._estimators[array.name] = restored or RLSEstimator(
+                settling_time_s=array.settling_time_s
+            )
 
-        self._pending_estimates: dict[str, tuple[float, float]] = {}
-        self._override_setpoints: dict[str, tuple[float, float]] = {}  # name -> (value, expires_at)
+        self._pending_estimates: dict[str, tuple[float, float, float]] = {}
+        self._override_setpoints: dict[
+            str, tuple[float, float]
+        ] = {}  # name -> (value, expires_at)
+        self._grid_unavailable_reported: bool = False
 
     def reload_config(self) -> None:
         """Re-read config from the config entry (called after options update)."""
@@ -202,7 +222,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         """Update the deadband threshold live."""
         self._deadband_w = value
 
-    def apply_array_config_update(self, array_name: str, updates: dict) -> None:
+    def apply_array_config_update(
+        self, array_name: str, updates: dict[str, Any]
+    ) -> None:
         """Live-update a single array's parameters (e.g. from number entity changes)."""
         for array in self._arrays:
             if array.name == array_name:
@@ -211,7 +233,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                         setattr(array, key, value)
                 break
 
-    def override_setpoint(self, array_name: str, value: float, duration_s: float = 300.0) -> None:
+    def override_setpoint(
+        self, array_name: str, value: float, duration_s: float = 300.0
+    ) -> None:
         """Force a setpoint for an array, bypassing PID for up to duration_s seconds."""
         self._override_setpoints[array_name] = (value, time.monotonic() + duration_s)
 
@@ -226,22 +250,36 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     async def _async_update_data(self) -> ZGCResult:
         """Main control loop — called every update_interval seconds."""
         now = time.monotonic()
-        dt = max(now - self._last_update, 0.1)
+        dt = max(now - self._last_update, CONTROL_DT_MIN)
+        dt = min(dt, CONTROL_DT_MAX)
         self._last_update = now
 
         try:
             return await self._run_control_loop(dt, now)
         except Exception as err:
-            raise UpdateFailed(f"ZGC update failed: {err}") from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="coordinator_update_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def _run_control_loop(self, dt: float, now: float) -> ZGCResult:
+        # --- Repair issue tracking ---
+        if self._is_grid_sensor_unavailable():
+            if not self._grid_unavailable_reported:
+                raise_grid_sensor_unavailable(self.hass, self._grid_entity or "")
+                self._grid_unavailable_reported = True
+        else:
+            if self._grid_unavailable_reported:
+                dismiss_grid_sensor_unavailable(self.hass)
+                self._grid_unavailable_reported = False
+
         # --- 1. Read & normalise grid measurement ---
         raw_w = self._read_grid()
 
         # --- 2. EWM low-pass filter ---
         self._filtered_w = (
-            self._ewm_alpha * raw_w
-            + (1.0 - self._ewm_alpha) * self._filtered_w
+            self._ewm_alpha * raw_w + (1.0 - self._ewm_alpha) * self._filtered_w
         )
 
         # --- 3. Mode guard ---
@@ -262,8 +300,11 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         pv_clipping_any = False
         if arrays_with_pv:
             for array in arrays_with_pv:
-                pv_w = self._read_sensor_safe(array.pv_power_entity, 0.0)
-                sp_w = self._current_setpoints.get(array.name, array.setpoint_max) * array.w_per_unit
+                pv_w = self._read_sensor_safe(array.pv_power_entity or "", 0.0)
+                sp_w = (
+                    self._current_setpoints.get(array.name, array.setpoint_max)
+                    * array.w_per_unit
+                )
                 if array.is_clipping_active(sp_w, pv_w):
                     pv_clipping_any = True
                     break
@@ -272,6 +313,15 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 return self._make_result(raw_w, STATUS_CLOUD_SHADOW)
 
         saturation = battery_clipping and not pv_clipping_any and bool(arrays_with_pv)
+
+        # --- 5b. Freeze integrator when no arrays can act (all settling/overridden) ---
+        if self._arrays and not any(
+            a.enabled
+            and now >= self._settling_until.get(a.name, 0.0)
+            and a.name not in self._override_setpoints
+            for a in self._arrays
+        ):
+            self._pid.freeze_integrator()
 
         # --- 6. PID compute ---
         delta_w = self._pid.compute(self._filtered_w, dt)
@@ -284,23 +334,46 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         written = await self._distribute_and_write(delta_w, now)
 
         # --- 9. Update RLS estimators (one-cycle delay) ---
-        self._update_estimators(written)
+        self._update_estimators(written, now)
 
         # --- 10. Optional: write battery setpoint ---
         if self._battery_control_enabled and self._battery_setpoint_entity:
-            await self._write_battery_target(raw_w)
+            await self._write_battery_target(self._filtered_w)
 
         # --- 11. Persist estimator states (fire-and-forget option update) ---
         self._persist_estimators()
 
-        status = STATUS_SATURATION if saturation else (
-            STATUS_PASSIVE if mode == MODE_PASSIVE else STATUS_ACTIVE
-        )
+        if saturation:
+            status = STATUS_SATURATION
+        elif mode == MODE_PASSIVE:
+            status = STATUS_PASSIVE
+        else:
+            status = STATUS_ACTIVE
         return self._make_result(raw_w, status)
 
     # ------------------------------------------------------------------
     # Grid reading
     # ------------------------------------------------------------------
+
+    def _is_grid_sensor_unavailable(self) -> bool:
+        """Return True if the configured grid sensor(s) are unavailable."""
+
+        def _unavail(eid: str | None) -> bool:
+            if not eid:
+                return False
+            s = self.hass.states.get(eid)
+            return s is None or s.state in ("unknown", "unavailable")
+
+        if self._measurement_type == "split":
+            return _unavail(self._grid_import_entity) or _unavail(
+                self._grid_export_entity
+            )
+        if self._measurement_type == "computed":
+            return any(
+                _unavail(e)
+                for e in self._consumption_entities + self._production_entities
+            )
+        return _unavail(self._grid_entity)
 
     def _read_grid(self) -> float:
         """Read and normalise grid power in Watts.
@@ -364,7 +437,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         if not self._battery_entity:
             return False
         battery_w = self._read_sensor_safe(self._battery_entity, 0.0)
-        return battery_w >= self._battery_max_charge_w * 0.95
+        return battery_w >= self._battery_max_charge_w * BATTERY_CLIPPING_THRESHOLD
 
     # ------------------------------------------------------------------
     # Setpoint distribution
@@ -379,15 +452,16 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         """
         # Clean up expired overrides
         expired = [
-            name for name, (_, exp) in self._override_setpoints.items()
-            if now >= exp
+            name for name, (_, exp) in self._override_setpoints.items() if now >= exp
         ]
         for name in expired:
             del self._override_setpoints[name]
 
         active = [
-            a for a in self._arrays
-            if a.enabled and now >= self._settling_until.get(a.name, 0.0)
+            a
+            for a in self._arrays
+            if a.enabled
+            and now >= self._settling_until.get(a.name, 0.0)
             and a.name not in self._override_setpoints
         ]
 
@@ -398,7 +472,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             a.name: (
                 a.headroom_up_w(self._current_setpoints.get(a.name, a.setpoint_max))
                 if delta_w > 0
-                else a.headroom_down_w(self._current_setpoints.get(a.name, a.setpoint_max))
+                else a.headroom_down_w(
+                    self._current_setpoints.get(a.name, a.setpoint_max)
+                )
             )
             for a in active
         }
@@ -419,7 +495,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
             current = self._current_setpoints.get(array.name, array.setpoint_max)
             new_sp = _clamp(
-                current + delta_unit,
+                current - delta_unit,
                 array.setpoint_min,
                 array.setpoint_max,
             )
@@ -452,39 +528,45 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     # RLS estimator
     # ------------------------------------------------------------------
 
-    def _update_estimators(self, written: dict[str, float]) -> None:
-        """Two-step measurement: record delta, then observe response next cycle.
+    def _update_estimators(self, written: dict[str, float], now: float) -> None:
+        """Two-step measurement: record delta, then observe response after settling.
 
         Only update the estimator if there was no new step for this array
         (clean measurement, not mixed signals).
         """
-        # Record new steps
+        # Record new steps with timestamp
         for name, delta_w in written.items():
-            self._pending_estimates[name] = (delta_w, self._filtered_w)
+            self._pending_estimates[name] = (delta_w, self._filtered_w, now)
 
-        # Observe responses for arrays where we did NOT step this cycle
-        for name, (prev_delta_sp_w, prev_grid_w) in list(
-            self._pending_estimates.items()
-        ):
+        # Observe responses — but only after the array has had time to settle
+        for name, pending in list(self._pending_estimates.items()):
+            prev_delta_sp_w, prev_grid_w, step_time = pending
             if name in written:
-                continue  # New step this cycle — wait for next
+                continue  # new step this cycle — wait
+            array = self.get_array(name)
+            settling = array.settling_time_s if array else DEFAULT_SETTLING_TIME_S
+            if now - step_time < settling:
+                continue  # not settled yet
             delta_grid = self._filtered_w - prev_grid_w
             if abs(prev_delta_sp_w) > 1:
                 estimator = self._estimators.get(name)
                 if estimator:
                     estimator.update(prev_delta_sp_w, delta_grid)
                     if estimator.is_reliable and not self._expert_mode:
-                        new_kp = estimator.suggest_kp(
-                            self._pid.kp, self._response_factor
+                        old_kp = self._pid.kp
+                        new_kp = estimator.suggest_kp(old_kp, self._response_factor)
+                        # Scale Ki proportionally to keep integral time constant Ti = Kp/Ki
+                        new_ki = (
+                            self._pid.ki * (new_kp / old_kp)
+                            if old_kp > 0
+                            else self._pid.ki
                         )
-                        self._pid.set_gains(new_kp, self._pid.ki, self._pid.kd)
+                        self._pid.set_gains(new_kp, new_ki, self._pid.kd)
             del self._pending_estimates[name]
 
     def _persist_estimators(self) -> None:
         """Write estimator states back to entry.options for HA restart persistence."""
-        state_dict = {
-            name: est.to_dict() for name, est in self._estimators.items()
-        }
+        state_dict = {name: est.to_dict() for name, est in self._estimators.items()}
         # Use hass.loop-safe update — do not await here
         self.hass.config_entries.async_update_entry(
             self._entry,
@@ -499,7 +581,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         """Write a battery power target to reduce grid imbalance."""
         if not self._battery_setpoint_entity:
             return
-        target = _clamp(-grid_w, -self._battery_max_charge_w, self._battery_max_charge_w)
+        target = _clamp(
+            -grid_w, -self._battery_max_charge_w, self._battery_max_charge_w
+        )
         await self.hass.services.async_call(
             "number",
             "set_value",
@@ -512,12 +596,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
     def _make_result(self, raw_w: float, mode: str) -> ZGCResult:
         components = self._pid.components
-        all_reliable = any(
-            est.is_reliable for est in self._estimators.values()
-        )
-        learning_status = (
-            "Calibrated \u2713" if all_reliable else "Learning..."
-        )
+        any_reliable = any(est.is_reliable for est in self._estimators.values())
+        learning_status = "Calibrated \u2713" if any_reliable else "Learning..."
 
         setpoints = dict(self._current_setpoints)
         array_clipping: dict[str, bool] = {}
@@ -527,7 +607,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         for array in self._arrays:
             pv_w = 0.0
             if array.pv_power_entity:
-                pv_w = self._read_sensor_safe(array.pv_power_entity, 0.0)
+                pv_w = self._read_sensor_safe(array.pv_power_entity or "", 0.0)
             sp = self._current_setpoints.get(array.name, array.setpoint_max)
             sp_w = sp * array.w_per_unit
             array_clipping[array.name] = array.is_clipping_active(sp_w, pv_w)
@@ -575,3 +655,15 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
     def get_estimator(self, array_name: str) -> RLSEstimator | None:
         return self._estimators.get(array_name)
+
+    @property
+    def grid_entity(self) -> str:
+        return self._grid_entity
+
+    @property
+    def invert_sign(self) -> bool:
+        return self._invert_sign
+
+    @property
+    def measurement_type(self) -> str:
+        return self._measurement_type

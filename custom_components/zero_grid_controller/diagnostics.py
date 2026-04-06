@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.issue_registry import async_get as ir_async_get
 
 from .const import (
     CONF_BATTERY_SENSOR,
@@ -16,6 +18,7 @@ from .const import (
     CONF_GRID_SENSOR_EXPORT,
     CONF_GRID_SENSOR_IMPORT,
     CONF_MODE_GUARD_ENTITY,
+    DOMAIN,
 )
 
 TO_REDACT: set[str] = {
@@ -64,12 +67,84 @@ async def async_get_config_entry_diagnostics(
             "ki": pid.ki,
             "kd": pid.kd,
             "integral": pid.integral,
+            "output_min": pid._output_min,
+            "output_max": pid._output_max,
         }
 
+    # Array configurations
+    array_configs: dict[str, Any] = {}
+    if coordinator is not None:
+        for array in coordinator.arrays:
+            array_configs[array.name] = {
+                "output_type": array.output_type,
+                "setpoint_min": array.setpoint_min,
+                "setpoint_max": array.setpoint_max,
+                "settling_time_s": array.settling_time_s,
+                "priority": array.priority,
+                "enabled": array.enabled,
+            }
+
+    # Active override setpoints (show only remaining seconds)
+    now = time.monotonic()
+    override_setpoints: dict[str, Any] = {}
+    if coordinator is not None:
+        for name, (value, expires_at) in coordinator._override_setpoints.items():
+            remaining = max(0.0, expires_at - now)
+            override_setpoints[name] = {
+                "value": value,
+                "remaining_seconds": round(remaining, 1),
+            }
+
+    # Settling state per array (seconds remaining, 0 if not settling)
+    settling_state: dict[str, float] = {}
+    if coordinator is not None:
+        for array in coordinator.arrays:
+            until = coordinator._settling_until.get(array.name, 0.0)
+            settling_state[array.name] = round(max(0.0, until - now), 1)
+
+    # Estimator details
     estimator_states: dict[str, Any] = {}
     if coordinator is not None:
-        for name, est in coordinator._estimators.items():
-            estimator_states[name] = est.to_dict()
+        for array in coordinator.arrays:
+            est = coordinator.get_estimator(array.name)
+            if est is not None:
+                est_dict = est.to_dict()
+                est_dict["is_reliable"] = est.is_reliable
+                est_dict["estimated_gain"] = est.estimated_gain
+                est_dict["suggested_kp"] = est.suggest_kp(
+                    coordinator.pid.kp, coordinator._response_factor
+                )
+                estimator_states[array.name] = est_dict
+
+    # Repair issues
+    issue_registry = ir_async_get(hass)
+    repair_issues = [
+        {
+            "issue_id": issue.issue_id,
+            "severity": issue.severity.value if issue.severity else None,
+            "is_fixable": issue.is_fixable,
+            "translation_key": issue.translation_key,
+        }
+        for issue in issue_registry.issues.values()
+        if issue.domain == DOMAIN
+    ]
+
+    # Coordinator timing
+    coordinator_timing: dict[str, Any] = {}
+    if coordinator is not None:
+        coordinator_timing = {
+            "last_update_success": coordinator.last_update_success,
+            "last_update_success_time": (
+                coordinator.last_update_success_time.isoformat()
+                if coordinator.last_update_success_time is not None
+                else None
+            ),
+            "update_interval_s": (
+                coordinator.update_interval.total_seconds()
+                if coordinator.update_interval is not None
+                else None
+            ),
+        }
 
     ent_reg = er.async_get(hass)
     entities = [
@@ -96,7 +171,12 @@ async def async_get_config_entry_diagnostics(
             },
         },
         "coordinator": coord_data,
+        "coordinator_timing": coordinator_timing,
         "pid": pid_state,
+        "arrays": array_configs,
+        "override_setpoints": override_setpoints,
+        "settling_state": settling_state,
         "estimators": estimator_states,
+        "repair_issues": repair_issues,
         "entities": entities,
     }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .const import CONTROL_DT_MIN
+
 
 class PIDController:
     """Discrete PID controller with conditional anti-windup.
@@ -47,7 +49,7 @@ class PIDController:
         (meaning integration would help bring the output back in range).
         """
         if dt <= 0:
-            dt = 0.1
+            dt = CONTROL_DT_MIN
 
         error = self.setpoint - measurement
 
@@ -62,17 +64,14 @@ class PIDController:
         self._d = self._kd * d_error
         self._prev_error = error
 
-        # Unclamped output (without integral for anti-windup check)
-        output_pi = self._p + self._ki * (self._integral + error * dt) + self._d
-
-        # Determine if adding the integral would be useful (anti-windup).
-        # Block integration when the output is clamped AND the error is still
-        # pushing further into saturation (same direction as the limit).
-        # Allow integration when: not clamped, OR error is pulling back from limit.
-        clamped_pi = self._clamp(output_pi)
-        at_limit = clamped_pi != output_pi
-        # "pushing into saturation" = error and unclamped output have the same sign
-        pushing_into_limit = (error >= 0 and output_pi >= 0) or (error < 0 and output_pi < 0)
+        # Anti-windup check uses only P+I (D is transient and should not affect windup detection)
+        output_pi_only = self._p + self._ki * (self._integral + error * dt)
+        clamped_pi_only = self._clamp(output_pi_only)
+        at_limit = clamped_pi_only != output_pi_only
+        # "pushing into saturation" = error and P+I output have the same sign
+        pushing_into_limit = (error >= 0 and output_pi_only >= 0) or (
+            error < 0 and output_pi_only < 0
+        )
 
         if not self._freeze and not (at_limit and pushing_into_limit):
             self._integral += error * dt
@@ -108,7 +107,9 @@ class PIDController:
         self._ki = ki
         self._kd = kd
 
-    def set_output_limits(self, output_min: float | None, output_max: float | None) -> None:
+    def set_output_limits(
+        self, output_min: float | None, output_max: float | None
+    ) -> None:
         """Update output clamp limits live."""
         self._output_min = output_min
         self._output_max = output_max

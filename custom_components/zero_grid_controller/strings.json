@@ -204,6 +204,17 @@
       }
     }
   },
+  "issues": {
+    "grid_sensor_unavailable": {
+      "title": "Grid sensor unavailable",
+      "description": "The grid power sensor `{entity_id}` is unavailable. Zero Grid Controller cannot function without a valid grid measurement. Check that the sensor is configured correctly and the integration providing it is running."
+    }
+  },
+  "exceptions": {
+    "coordinator_update_failed": {
+      "message": "Zero Grid Controller update failed: {error}"
+    }
+  },
   "services": {
     "reset_pid": {
       "name": "Reset PID",

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -23,6 +22,9 @@ from .const import (
     CONF_OUTPUT_MAX_W,
     CONF_SETTLING_TIME_S,
     CONF_W_PER_UNIT,
+    DEADBAND_MAX_W,
+    DEADBAND_MIN_W,
+    DEADBAND_STEP_W,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_KD,
@@ -31,7 +33,27 @@ from .const import (
     DEFAULT_OUTPUT_MAX_W,
     DEFAULT_SETTLING_TIME_S,
     DEFAULT_W_PER_UNIT,
-    DOMAIN,
+    EWM_ALPHA_MAX,
+    EWM_ALPHA_MIN,
+    EWM_ALPHA_STEP,
+    KD_MAX,
+    KD_MIN,
+    KD_STEP,
+    KI_MAX,
+    KI_MIN,
+    KI_STEP,
+    KP_MAX,
+    KP_MIN,
+    KP_STEP,
+    OUTPUT_MAX_MAX_W,
+    OUTPUT_MAX_MIN_W,
+    OUTPUT_MAX_STEP_W,
+    SETTLING_TIME_MAX_S,
+    SETTLING_TIME_MIN_S,
+    SETTLING_TIME_STEP_S,
+    W_PER_UNIT_MAX,
+    W_PER_UNIT_MIN,
+    W_PER_UNIT_STEP,
 )
 from .coordinator import ZeroGridCoordinator
 
@@ -78,6 +100,7 @@ async def async_setup_entry(
 # Base class
 # ---------------------------------------------------------------------------
 
+
 class ZGCNumberBase(NumberEntity):
     """Base class for ZGC number entities."""
 
@@ -104,14 +127,14 @@ class ZGCNumberBase(NumberEntity):
     @property
     def entity_registry_enabled_default(self) -> bool:
         """Show only in expert mode."""
-        return bool(
-            self._entry.options.get(CONF_EXPERT_MODE, False)
-        )
+        return bool(self._entry.options.get(CONF_EXPERT_MODE, False))
 
     @property
     def native_value(self) -> float:
         return float(
-            self._entry.options.get(self._key, self._entry.data.get(self._key, self._default))
+            self._entry.options.get(
+                self._key, self._entry.data.get(self._key, self._default)
+            )
         )
 
     async def async_set_native_value(self, value: float) -> None:
@@ -131,48 +154,63 @@ class ZGCNumberBase(NumberEntity):
 # Main device number entities
 # ---------------------------------------------------------------------------
 
-class ZGCKpNumber(ZGCNumberBase):
-    _attr_native_min_value = 0.001
-    _attr_native_max_value = 10.0
-    _attr_native_step = 0.001
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+class ZGCKpNumber(ZGCNumberBase):
+    _attr_native_min_value = KP_MIN
+    _attr_native_max_value = KP_MAX
+    _attr_native_step = KP_STEP
+
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device, CONF_KP, DEFAULT_KP)
 
     async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_gains(value, self._coordinator.pid.ki, self._coordinator.pid.kd)
+        self._coordinator.pid.set_gains(
+            value, self._coordinator.pid.ki, self._coordinator.pid.kd
+        )
 
 
 class ZGCKiNumber(ZGCNumberBase):
-    _attr_native_min_value = 0.0
-    _attr_native_max_value = 1.0
-    _attr_native_step = 0.001
+    _attr_native_min_value = KI_MIN
+    _attr_native_max_value = KI_MAX
+    _attr_native_step = KI_STEP
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device, CONF_KI, DEFAULT_KI)
 
     async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_gains(self._coordinator.pid.kp, value, self._coordinator.pid.kd)
+        self._coordinator.pid.set_gains(
+            self._coordinator.pid.kp, value, self._coordinator.pid.kd
+        )
 
 
 class ZGCKdNumber(ZGCNumberBase):
-    _attr_native_min_value = 0.0
-    _attr_native_max_value = 1.0
-    _attr_native_step = 0.001
+    _attr_native_min_value = KD_MIN
+    _attr_native_max_value = KD_MAX
+    _attr_native_step = KD_STEP
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device, CONF_KD, DEFAULT_KD)
 
     async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_gains(self._coordinator.pid.kp, self._coordinator.pid.ki, value)
+        self._coordinator.pid.set_gains(
+            self._coordinator.pid.kp, self._coordinator.pid.ki, value
+        )
 
 
 class ZGCEwmAlphaNumber(ZGCNumberBase):
-    _attr_native_min_value = 0.05
-    _attr_native_max_value = 1.0
-    _attr_native_step = 0.05
+    _attr_native_min_value = EWM_ALPHA_MIN
+    _attr_native_max_value = EWM_ALPHA_MAX
+    _attr_native_step = EWM_ALPHA_STEP
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device, CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA)
 
     async def _on_value_changed(self, value: float) -> None:
@@ -180,24 +218,32 @@ class ZGCEwmAlphaNumber(ZGCNumberBase):
 
 
 class ZGCDeadbandNumber(ZGCNumberBase):
-    _attr_native_min_value = 0.0
-    _attr_native_max_value = 500.0
-    _attr_native_step = 1.0
+    _attr_native_min_value = DEADBAND_MIN_W
+    _attr_native_max_value = DEADBAND_MAX_W
+    _attr_native_step = DEADBAND_STEP_W
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
-        super().__init__(coordinator, entry, device, CONF_DEADBAND_W, DEFAULT_DEADBAND_W)
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
+        super().__init__(
+            coordinator, entry, device, CONF_DEADBAND_W, DEFAULT_DEADBAND_W
+        )
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.set_deadband(value)
 
 
 class ZGCOutputMaxNumber(ZGCNumberBase):
-    _attr_native_min_value = 100.0
-    _attr_native_max_value = 50000.0
-    _attr_native_step = 100.0
+    _attr_native_min_value = OUTPUT_MAX_MIN_W
+    _attr_native_max_value = OUTPUT_MAX_MAX_W
+    _attr_native_step = OUTPUT_MAX_STEP_W
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
-        super().__init__(coordinator, entry, device, CONF_OUTPUT_MAX_W, DEFAULT_OUTPUT_MAX_W)
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
+        super().__init__(
+            coordinator, entry, device, CONF_OUTPUT_MAX_W, DEFAULT_OUTPUT_MAX_W
+        )
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.pid.set_output_limits(-value, value)
@@ -206,6 +252,7 @@ class ZGCOutputMaxNumber(ZGCNumberBase):
 # ---------------------------------------------------------------------------
 # Per-array number entities
 # ---------------------------------------------------------------------------
+
 
 class ZGCArrayNumberBase(ZGCNumberBase):
     """Base for per-array number entities."""
@@ -226,12 +273,25 @@ class ZGCArrayNumberBase(ZGCNumberBase):
 
 
 class ZGCArraySettlingTimeNumber(ZGCArrayNumberBase):
-    _attr_native_min_value = 2.0
-    _attr_native_max_value = 120.0
-    _attr_native_step = 1.0
+    _attr_native_min_value = SETTLING_TIME_MIN_S
+    _attr_native_max_value = SETTLING_TIME_MAX_S
+    _attr_native_step = SETTLING_TIME_STEP_S
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo, array_name: str) -> None:
-        super().__init__(coordinator, entry, device, CONF_SETTLING_TIME_S, float(DEFAULT_SETTLING_TIME_S), array_name)
+    def __init__(
+        self,
+        coordinator: ZeroGridCoordinator,
+        entry: ConfigEntry,
+        device: DeviceInfo,
+        array_name: str,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            entry,
+            device,
+            CONF_SETTLING_TIME_S,
+            float(DEFAULT_SETTLING_TIME_S),
+            array_name,
+        )
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.apply_array_config_update(
@@ -240,12 +300,20 @@ class ZGCArraySettlingTimeNumber(ZGCArrayNumberBase):
 
 
 class ZGCArrayWPerUnitNumber(ZGCArrayNumberBase):
-    _attr_native_min_value = 0.1
-    _attr_native_max_value = 1000.0
-    _attr_native_step = 0.1
+    _attr_native_min_value = W_PER_UNIT_MIN
+    _attr_native_max_value = W_PER_UNIT_MAX
+    _attr_native_step = W_PER_UNIT_STEP
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo, array_name: str) -> None:
-        super().__init__(coordinator, entry, device, CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT, array_name)
+    def __init__(
+        self,
+        coordinator: ZeroGridCoordinator,
+        entry: ConfigEntry,
+        device: DeviceInfo,
+        array_name: str,
+    ) -> None:
+        super().__init__(
+            coordinator, entry, device, CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT, array_name
+        )
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.apply_array_config_update(

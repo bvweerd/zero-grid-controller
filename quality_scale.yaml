@@ -19,19 +19,22 @@ rules:
       pid.py (PID controller), estimator.py (RLS estimator), array.py
       (array dataclass), calibrator.py (calibration logic), const.py.
   config-flow-test-coverage:
-    status: todo
-    comment: Config flow tests not yet written.
+    status: done
+    comment: >
+      tests/test_config_flow.py covers all wizard steps (net/split/computed modes,
+      mode guard with mapping, duplicate abort), options flow (speed, expert mode),
+      and subentry add/reconfigure flows (10 tests total).
   config-flow:
     status: done
     comment: >
-      Wizard-style ConfigFlow with steps: user → add_array → another_array →
-      battery → mode_guard → mode_mapping → done. OptionsFlow with menu:
-      speed / expert / recalibrate. ArraySubEntryFlow with user + reconfigure.
+      Wizard-style ConfigFlow with steps: user → battery → mode_guard →
+      mode_mapping → done. PV arrays added via ArraySubEntryFlow (user +
+      reconfigure). OptionsFlow with menu: speed / expert / recalibrate.
   dependency-transparency:
     status: done
     comment: >
-      requirements: [] — no external PyPI packages. Only stdlib and numpy
-      (bundled with Home Assistant).
+      requirements: [] — no external PyPI packages. Only stdlib and
+      Home Assistant built-in helpers.
   docs-actions:
     status: done
     comment: services.yaml documents all four service actions with fields and examples.
@@ -111,10 +114,11 @@ rules:
     status: exempt
     comment: No authentication required.
   test-coverage:
-    status: todo
+    status: done
     comment: >
-      Unit tests for pid.py and estimator.py written. Integration-level tests
-      for coordinator, config_flow, sensor, number, switch pending.
+      Unit tests written for pid.py, estimator.py, coordinator (11 tests),
+      config_flow (10 tests), and entity classes in sensor/number/switch (6 tests).
+      57 tests pass in total.
 
   # Gold
   devices:
@@ -181,8 +185,11 @@ rules:
     comment: >
       All entities have _attr_translation_key; translations/en.json present.
   exception-translations:
-    status: todo
-    comment: UpdateFailed calls do not yet use translation_domain/translation_key.
+    status: done
+    comment: >
+      UpdateFailed in coordinator uses translation_domain=DOMAIN,
+      translation_key="coordinator_update_failed" with {error} placeholder.
+      exceptions section added to strings.json and translations/en.json.
   icon-translations:
     status: done
     comment: icons.json with MDI icons for all entity types and services.
@@ -192,8 +199,13 @@ rules:
       OptionsFlow for main settings; ArraySubEntryFlow.async_step_reconfigure
       for per-array reconfiguration.
   repair-issues:
-    status: todo
-    comment: Repair issues not yet implemented (e.g. grid sensor unavailable).
+    status: done
+    comment: >
+      repairs.py implements raise_grid_sensor_unavailable and dismiss_grid_sensor_unavailable
+      using async_create_issue/async_delete_issue. ZeroGridCoordinator._run_control_loop
+      checks _is_grid_sensor_unavailable() each cycle and raises/dismisses the
+      ISSUE_GRID_SENSOR_UNAVAILABLE repair issue accordingly. Issue translation key
+      added to strings.json and translations/en.json.
   stale-devices:
     status: done
     comment: >
