@@ -22,14 +22,13 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .calibrator import ArrayCalibrator
 from .const import (
     ARRAY_SUBENTRY_TYPE,
+    BATTERY_SUBENTRY_TYPE,
     CONF_NAME,
     DOMAIN,
     PLATFORMS,
-    RESPONSE_FACTORS,
     SERVICE_OVERRIDE_SETPOINT,
     SERVICE_RECALIBRATE,
     SERVICE_RESET_PID,
-    SERVICE_SET_RESPONSE_SPEED,
 )
 from .coordinator import ZeroGridCoordinator
 
@@ -49,6 +48,7 @@ class ZGCData:
     coordinator: ZeroGridCoordinator
     device: DeviceInfo
     array_devices: dict[str, DeviceInfo] = field(default_factory=dict)
+    battery_devices: dict[str, DeviceInfo] = field(default_factory=dict)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -69,22 +69,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = ZeroGridCoordinator(hass, entry)
 
     array_devices: dict[str, DeviceInfo] = {}
+    battery_devices: dict[str, DeviceInfo] = {}
+
     for subentry in entry.subentries.values():
-        if subentry.subentry_type != ARRAY_SUBENTRY_TYPE:
-            continue
-        array_name = subentry.data.get("array_name", subentry.subentry_id)
-        array_devices[subentry.subentry_id] = DeviceInfo(
-            identifiers={(DOMAIN, subentry.subentry_id)},
-            name=array_name,
-            manufacturer="Custom",
-            model="PV Array",
-            via_device=(DOMAIN, entry.entry_id),
-        )
+        if subentry.subentry_type == ARRAY_SUBENTRY_TYPE:
+            array_name = subentry.data.get("array_name", subentry.subentry_id)
+            array_devices[subentry.subentry_id] = DeviceInfo(
+                identifiers={(DOMAIN, subentry.subentry_id)},
+                name=array_name,
+                manufacturer="Custom",
+                model="PV Array",
+                via_device=(DOMAIN, entry.entry_id),
+            )
+        elif subentry.subentry_type == BATTERY_SUBENTRY_TYPE:
+            battery_name = subentry.data.get("name", subentry.title)
+            battery_devices[subentry.subentry_id] = DeviceInfo(
+                identifiers={(DOMAIN, subentry.subentry_id)},
+                name=battery_name,
+                manufacturer="Custom",
+                model="Battery",
+                via_device=(DOMAIN, entry.entry_id),
+            )
 
     entry.runtime_data = ZGCData(
         coordinator=coordinator,
         device=main_device,
         array_devices=array_devices,
+        battery_devices=battery_devices,
     )
 
     # Register services (once per domain)
@@ -114,7 +125,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for service in (
                 SERVICE_RESET_PID,
                 SERVICE_RECALIBRATE,
-                SERVICE_SET_RESPONSE_SPEED,
                 SERVICE_OVERRIDE_SETPOINT,
             ):
                 hass.services.async_remove(DOMAIN, service)
@@ -185,8 +195,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 calibrator.run(
                     hass,
                     arrays,
-                    coordinator.grid_entity,
-                    coordinator.invert_sign,
+                    coordinator.read_grid_w,
                     lambda msg, pct: _LOGGER.debug(
                         "Calibration: %s (%.0f%%)", msg, pct * 100
                     ),
@@ -198,26 +207,6 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_RECALIBRATE,
         _handle_recalibrate,
         schema=vol.Schema({vol.Optional("array_name"): str}),
-    )
-
-    async def _handle_set_response_speed(call: ServiceCall) -> None:
-        speed: str = call.data["speed"]
-        factor = RESPONSE_FACTORS.get(speed)
-        if factor is None:
-            _LOGGER.error("Unknown speed '%s'; choose cautious/normal/fast", speed)
-            return
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            hass.config_entries.async_update_entry(
-                entry, options={**entry.options, "response_factor": factor}
-            )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_RESPONSE_SPEED,
-        _handle_set_response_speed,
-        schema=vol.Schema(
-            {vol.Required("speed"): vol.In(["cautious", "normal", "fast"])}
-        ),
     )
 
     async def _handle_override_setpoint(call: ServiceCall) -> None:

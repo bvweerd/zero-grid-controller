@@ -18,10 +18,10 @@ Calibration procedure:
   5. Compute w_per_unit = Δgrid / 10.
   6. Restore original setpoint.
 """
+
 from __future__ import annotations
 
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,10 +29,10 @@ import pytest
 from custom_components.zero_grid_controller.array import ArrayConfig
 from custom_components.zero_grid_controller.calibrator import ArrayCalibrator
 
-
 # ---------------------------------------------------------------------------
 # Minimal fake HA infrastructure
 # ---------------------------------------------------------------------------
+
 
 class _State:
     def __init__(self, value: str) -> None:
@@ -96,9 +96,26 @@ def _written_setpoints(hass: MagicMock) -> list[float]:
     ]
 
 
+def _make_read_grid(states: _SequenceStates, entity_id: str, invert: bool = False):
+    """Return a read_grid callable wrapping a SequenceStates instance."""
+
+    def _read():
+        state = states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            v = float(state.state)
+            return -v if invert else v
+        except ValueError:
+            return None
+
+    return _read
+
+
 # ---------------------------------------------------------------------------
 # Array fixtures
 # ---------------------------------------------------------------------------
+
 
 def _pv_west(pv_sensor: bool = False) -> ArrayConfig:
     """PV West 2.4 kWp — west-facing, ~23 W/% at full output."""
@@ -113,7 +130,6 @@ def _pv_west(pv_sensor: bool = False) -> ArrayConfig:
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
-        priority=1,
     )
 
 
@@ -130,7 +146,6 @@ def _pv_zuidarray() -> ArrayConfig:
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
-        priority=2,
     )
 
 
@@ -142,6 +157,7 @@ def _pv_zuidarray() -> ArrayConfig:
 # the grid rises to ~280 W (ΔP ≈ 230 W / 10 % = 23 W/%).
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_pv_west_success() -> None:
     states = _SequenceStates()
     # Current setpoint: 80 %
@@ -151,8 +167,23 @@ async def test_calibration_pv_west_success() -> None:
     states.set_sequence(
         "sensor.grid_power",
         ["50.0"] * 40
-        + ["120.0", "150.0", "180.0", "210.0", "230.0", "245.0", "255.0",
-           "262.0", "267.0", "270.0", "273.0", "275.0", "277.0", "279.0", "280.0"]
+        + [
+            "120.0",
+            "150.0",
+            "180.0",
+            "210.0",
+            "230.0",
+            "245.0",
+            "255.0",
+            "262.0",
+            "267.0",
+            "270.0",
+            "273.0",
+            "275.0",
+            "277.0",
+            "279.0",
+            "280.0",
+        ]
         + ["280.0"] * 10,
     )
 
@@ -161,9 +192,15 @@ async def test_calibration_pv_west_success() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     result = results["PV West"]
@@ -182,6 +219,7 @@ async def test_calibration_pv_west_success() -> None:
 # With a PV power sensor the stability check detects avg < 100 W and bails.
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_no_sun_fails() -> None:
     states = _SequenceStates()
     states.set("number.pv_west_limit", "80.0")
@@ -195,7 +233,10 @@ async def test_calibration_no_sun_fails() -> None:
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
         results = await calibrator.run(
-            hass, [_pv_west(pv_sensor=True)], "sensor.grid_power", False, lambda *_: None
+            hass,
+            [_pv_west(pv_sensor=True)],
+            _make_read_grid(states, "sensor.grid_power", False),
+            lambda *_: None,
         )
 
     assert results["PV West"].confidence == "failed"
@@ -208,26 +249,30 @@ async def test_calibration_no_sun_fails() -> None:
 # and the user triggers recalibration without first opening the limit.
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_no_step_room_returns_defaults() -> None:
     states = _SequenceStates()
-    states.set("number.pv_west_limit", "0.0")   # at minimum already
+    states.set("number.pv_west_limit", "0.0")  # at minimum already
     states.set("sensor.grid_power", "50.0")
 
     hass = _make_hass(states)
     array = _pv_west()
     array.setpoint_min = 0.0
-    array.setpoint_max = 0.0   # range collapsed — no room
+    array.setpoint_max = 0.0  # range collapsed — no room
     calibrator = ArrayCalibrator()
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
         results = await calibrator.run(
-            hass, [array], "sensor.grid_power", False, lambda *_: None
+            hass,
+            [array],
+            _make_read_grid(states, "sensor.grid_power", False),
+            lambda *_: None,
         )
 
     result = results["PV West"]
     assert result.confidence in ("estimated", "failed")
-    assert result.w_per_unit == pytest.approx(10.0)   # safe default
+    assert result.w_per_unit == pytest.approx(10.0)  # safe default
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +282,7 @@ async def test_calibration_no_step_room_returns_defaults() -> None:
 # (1210 W) while calibration is running, pushing an already-exporting grid
 # well past the ±3000 W safety threshold.
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_grid_safety_abort_restores_setpoint() -> None:
     states = _SequenceStates()
@@ -252,9 +298,15 @@ async def test_calibration_grid_safety_abort_restores_setpoint() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     assert results["PV West"].confidence in ("estimated", "failed")
@@ -268,6 +320,7 @@ async def test_calibration_grid_safety_abort_restores_setpoint() -> None:
 # Real-world use: user presses "Stop calibration" mid-run while PV West is
 # being measured; PV Zuid and later arrays must not be touched.
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_abort_stops_at_first_array() -> None:
     states = _SequenceStates()
@@ -291,7 +344,10 @@ async def test_calibration_abort_stops_at_first_array() -> None:
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", _aborting_sleep)
         results = await calibrator.run(
-            hass, arrays, "sensor.grid_power", False, lambda *_: None
+            hass,
+            arrays,
+            _make_read_grid(states, "sensor.grid_power", False),
+            lambda *_: None,
         )
 
     # Only PV West should appear; PV Zuid must have been skipped
@@ -306,6 +362,7 @@ async def test_calibration_abort_stops_at_first_array() -> None:
 # still measures the correct Δgrid.
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_inverted_sign_measures_correctly() -> None:
     states = _SequenceStates()
     states.set("number.pv_west_limit", "80.0")
@@ -316,8 +373,18 @@ async def test_calibration_inverted_sign_measures_correctly() -> None:
     states.set_sequence(
         "sensor.grid_power",
         ["-50.0"] * 40
-        + ["-150.0", "-200.0", "-240.0", "-260.0", "-270.0",
-           "-275.0", "-277.0", "-279.0", "-280.0", "-280.0"]
+        + [
+            "-150.0",
+            "-200.0",
+            "-240.0",
+            "-260.0",
+            "-270.0",
+            "-275.0",
+            "-277.0",
+            "-279.0",
+            "-280.0",
+            "-280.0",
+        ]
         + ["-280.0"] * 10,
     )
 
@@ -326,10 +393,16 @@ async def test_calibration_inverted_sign_measures_correctly() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             # invert_sign=True flips reading: −50 → +50, −280 → +280
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", True, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", True),
+                lambda *_: None,
             )
 
     result = results["PV West"]
@@ -342,6 +415,7 @@ async def test_calibration_inverted_sign_measures_correctly() -> None:
 # Test 7: Unavailable setpoint — returns default when setpoint entity is unavailable
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_setpoint_unavailable_returns_default() -> None:
     states = _SequenceStates()
     # Setpoint entity is unavailable
@@ -353,9 +427,15 @@ async def test_calibration_setpoint_unavailable_returns_default() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     assert results["PV West"].confidence in ("estimated",)
@@ -364,6 +444,7 @@ async def test_calibration_setpoint_unavailable_returns_default() -> None:
 # ---------------------------------------------------------------------------
 # Test 8: Grid unavailable during baseline → returns default
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_baseline_unavailable_returns_default() -> None:
     states = _SequenceStates()
@@ -380,9 +461,15 @@ async def test_calibration_baseline_unavailable_returns_default() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     assert results["PV West"].confidence in ("estimated",)
@@ -391,6 +478,7 @@ async def test_calibration_baseline_unavailable_returns_default() -> None:
 # ---------------------------------------------------------------------------
 # Test 9: Grid reads None during response loop (continue)
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_grid_none_during_loop() -> None:
     states = _SequenceStates()
@@ -408,9 +496,15 @@ async def test_calibration_grid_none_during_loop() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     # Should complete (either measured or failed, but not crash)
@@ -420,6 +514,7 @@ async def test_calibration_grid_none_during_loop() -> None:
 # ---------------------------------------------------------------------------
 # Test 10: Small response → w_per_unit < 0.5 → confidence "failed"
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_tiny_response_fails() -> None:
     states = _SequenceStates()
@@ -435,9 +530,15 @@ async def test_calibration_tiny_response_fails() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west()],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     assert results["PV West"].confidence == "failed"
@@ -447,6 +548,7 @@ async def test_calibration_tiny_response_fails() -> None:
 # ---------------------------------------------------------------------------
 # Test 11: Multi-array without abort — inter-array sleep called
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_multi_array_inter_array_sleep() -> None:
     states = _SequenceStates()
@@ -466,9 +568,15 @@ async def test_calibration_multi_array_inter_array_sleep() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", _record_sleep)
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic()):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(),
+        ):
             results = await calibrator.run(
-                hass, arrays, "sensor.grid_power", False, lambda *_: None
+                hass,
+                arrays,
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     # Both arrays should be in results
@@ -482,6 +590,7 @@ async def test_calibration_multi_array_inter_array_sleep() -> None:
 # Test 12: _wait_for_stable with PV sensor — stable (early return = True)
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_wait_stable_pv_sensor_stable() -> None:
     states = _SequenceStates()
     states.set("number.pv_west_limit", "80.0")
@@ -493,8 +602,7 @@ async def test_calibration_wait_stable_pv_sensor_stable() -> None:
     # Baseline and response: stable grid
     states.set_sequence(
         "sensor.grid_power",
-        ["50.0"] * 10
-        + ["280.0"] * 30,
+        ["50.0"] * 10 + ["280.0"] * 30,
     )
 
     hass = _make_hass(states)
@@ -502,9 +610,15 @@ async def test_calibration_wait_stable_pv_sensor_stable() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic(start=0.0)):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(start=0.0),
+        ):
             results = await calibrator.run(
-                hass, [_pv_west(pv_sensor=True)], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west(pv_sensor=True)],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     # Calibration completed (may be measured or failed, but did not abort early)
@@ -514,6 +628,7 @@ async def test_calibration_wait_stable_pv_sensor_stable() -> None:
 # ---------------------------------------------------------------------------
 # Test 13: _wait_for_stable with PV sensor — deadline expires, enough samples
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_wait_stable_deadline_expires() -> None:
     states = _SequenceStates()
@@ -528,7 +643,6 @@ async def test_calibration_wait_stable_deadline_expires() -> None:
     hass = _make_hass(states)
     calibrator = ArrayCalibrator()
     # monotonic always returns a large value so deadline is immediately past
-    import time as _time
     large_t = [10000.0]
 
     def _always_past():
@@ -538,62 +652,59 @@ async def test_calibration_wait_stable_deadline_expires() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _always_past):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _always_past,
+        ):
             results = await calibrator.run(
-                hass, [_pv_west(pv_sensor=True)], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west(pv_sensor=True)],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     assert "PV West" in results
 
 
 # ---------------------------------------------------------------------------
-# Test 14: _read_grid with ValueError → returns None
+# Test 14: _make_read_grid callable — handles non-numeric state
 # ---------------------------------------------------------------------------
 
-async def test_calibration_read_grid_value_error() -> None:
+
+async def test_make_read_grid_value_error() -> None:
     states = _SequenceStates()
     states.set("sensor.grid_power", "not_a_number")
-
-    hass = _make_hass(states)
-    calibrator = ArrayCalibrator()
-
-    result = calibrator._read_grid(hass, "sensor.grid_power", False)
-    assert result is None
+    read_grid = _make_read_grid(states, "sensor.grid_power")
+    assert read_grid() is None
 
 
 # ---------------------------------------------------------------------------
-# Test 15: _read_grid with unavailable state → returns None
+# Test 15: _make_read_grid callable — handles unavailable state
 # ---------------------------------------------------------------------------
 
-async def test_calibration_read_grid_unavailable() -> None:
+
+async def test_make_read_grid_unavailable() -> None:
     states = _SequenceStates()
     states.set("sensor.grid_power", "unavailable")
-
-    hass = _make_hass(states)
-    calibrator = ArrayCalibrator()
-
-    result = calibrator._read_grid(hass, "sensor.grid_power", False)
-    assert result is None
+    read_grid = _make_read_grid(states, "sensor.grid_power")
+    assert read_grid() is None
 
 
 # ---------------------------------------------------------------------------
-# Test 16: _read_grid with None state → returns None
+# Test 16: _make_read_grid callable — handles missing entity
 # ---------------------------------------------------------------------------
 
-async def test_calibration_read_grid_no_state() -> None:
+
+async def test_make_read_grid_no_state() -> None:
     states = _SequenceStates()
-    # Don't set sensor.missing → state.get() returns None
-
-    hass = _make_hass(states)
-    calibrator = ArrayCalibrator()
-
-    result = calibrator._read_grid(hass, "sensor.missing", False)
-    assert result is None
+    read_grid = _make_read_grid(states, "sensor.missing")
+    assert read_grid() is None
 
 
 # ---------------------------------------------------------------------------
 # Test 17: _read_setpoint with unavailable → returns None
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_read_setpoint_unavailable() -> None:
     states = _SequenceStates()
@@ -612,6 +723,7 @@ async def test_calibration_read_setpoint_unavailable() -> None:
 # Test 18: _read_setpoint with non-numeric → returns None
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_read_setpoint_value_error() -> None:
     states = _SequenceStates()
     states.set("number.sp", "not_a_number")
@@ -628,6 +740,7 @@ async def test_calibration_read_setpoint_value_error() -> None:
 # ---------------------------------------------------------------------------
 # Test 19: _write_setpoint with OUTPUT_TYPE_SWITCH — calls switch service
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_write_setpoint_switch_type() -> None:
     states = _SequenceStates()
@@ -647,7 +760,6 @@ async def test_calibration_write_setpoint_switch_type() -> None:
         setpoint_min=0.0,
         setpoint_max=1.0,
         settling_time_s=5,
-        priority=1,
     )
 
     # Write value > 0 → turn_on
@@ -665,6 +777,7 @@ async def test_calibration_write_setpoint_switch_type() -> None:
 # Test 20: _wait_for_stable without PV sensor, insufficient grid samples
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_wait_stable_no_pv_insufficient_samples() -> None:
     states = _SequenceStates()
     states.set("number.pv_west_limit", "80.0")
@@ -681,7 +794,10 @@ async def test_calibration_wait_stable_no_pv_insufficient_samples() -> None:
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
         results = await calibrator.run(
-            hass, [_pv_west()], "sensor.grid_power", False, lambda *_: None
+            hass,
+            [_pv_west()],
+            _make_read_grid(states, "sensor.grid_power", False),
+            lambda *_: None,
         )
 
     assert results["PV West"].confidence == "failed"
@@ -690,6 +806,7 @@ async def test_calibration_wait_stable_no_pv_insufficient_samples() -> None:
 # ---------------------------------------------------------------------------
 # Test 21: _read_setpoint with None state → returns None
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_read_setpoint_none_state() -> None:
     states = _SequenceStates()
@@ -708,6 +825,7 @@ async def test_calibration_read_setpoint_none_state() -> None:
 # Test 22: _wait_for_stable with PV sensor — ValueError in float parsing
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_wait_stable_pv_value_error() -> None:
     """ValueError when parsing PV sensor state is silently handled."""
     states = _SequenceStates()
@@ -724,10 +842,16 @@ async def test_calibration_wait_stable_pv_value_error() -> None:
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(asyncio, "sleep", AsyncMock())
-        with patch("custom_components.zero_grid_controller.calibrator.time.monotonic", _FakeMonotonic(start=0.0)):
+        with patch(
+            "custom_components.zero_grid_controller.calibrator.time.monotonic",
+            _FakeMonotonic(start=0.0),
+        ):
             # Should not raise
             results = await calibrator.run(
-                hass, [_pv_west(pv_sensor=True)], "sensor.grid_power", False, lambda *_: None
+                hass,
+                [_pv_west(pv_sensor=True)],
+                _make_read_grid(states, "sensor.grid_power", False),
+                lambda *_: None,
             )
 
     assert "PV West" in results

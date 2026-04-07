@@ -1,15 +1,20 @@
 """Repair issues for Zero Grid Controller."""
+
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue, async_delete_issue
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 
 from .const import DOMAIN
 
 ISSUE_GRID_SENSOR_UNAVAILABLE = "grid_sensor_unavailable"
 
 
-def raise_grid_sensor_unavailable(hass: HomeAssistant, entity_id: str) -> None:
+def raise_grid_sensor_unavailable(hass: HomeAssistant) -> None:
     """Create a repair issue for an unavailable grid sensor."""
     async_create_issue(
         hass,
@@ -18,7 +23,6 @@ def raise_grid_sensor_unavailable(hass: HomeAssistant, entity_id: str) -> None:
         is_fixable=False,
         severity=IssueSeverity.ERROR,
         translation_key=ISSUE_GRID_SENSOR_UNAVAILABLE,
-        translation_placeholders={"entity_id": entity_id},
     )
 
 

@@ -1,9 +1,8 @@
 """Tests for the Zero Grid Controller __init__.py module."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -17,16 +16,20 @@ from custom_components.zero_grid_controller import (
 )
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
-    CONF_GRID_MEASUREMENT_TYPE,
-    CONF_GRID_SENSOR,
+    CONF_GRID_IMPORT_SENSORS,
     CONF_INVERT_SIGN,
     CONF_SETPOINT_ENTITY,
     DOMAIN,
     SERVICE_OVERRIDE_SETPOINT,
     SERVICE_RECALIBRATE,
     SERVICE_RESET_PID,
-    SERVICE_SET_RESPONSE_SPEED,
 )
+
+
+@pytest.fixture(autouse=True)
+def auto_enable_custom_integrations(enable_custom_integrations):
+    """Enable custom integrations for all tests in this module."""
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +56,7 @@ def _make_mock_hass(services_registered: bool = False) -> MagicMock:
 # Test 1: async_remove_config_entry_device — stale device allowed
 # ---------------------------------------------------------------------------
 
+
 async def test_remove_stale_device() -> None:
     """Stale device (not in entry_id, not in subentries) can be removed."""
     device_entry = MagicMock()
@@ -69,6 +73,7 @@ async def test_remove_stale_device() -> None:
 # Test 2: async_remove_config_entry_device — main device blocked
 # ---------------------------------------------------------------------------
 
+
 async def test_remove_main_device_blocked() -> None:
     """Main device cannot be removed while the entry is active."""
     device_entry = MagicMock()
@@ -84,6 +89,7 @@ async def test_remove_main_device_blocked() -> None:
 # ---------------------------------------------------------------------------
 # Test 3: async_remove_config_entry_device — active subentry blocked
 # ---------------------------------------------------------------------------
+
 
 async def test_remove_active_subentry_blocked() -> None:
     """Active subentry device cannot be removed."""
@@ -102,6 +108,7 @@ async def test_remove_active_subentry_blocked() -> None:
 # Test 4: async_remove_config_entry_device — non-domain identifier skipped
 # ---------------------------------------------------------------------------
 
+
 async def test_remove_device_non_domain_identifier() -> None:
     """Identifiers from other domains are skipped, stale device is removable."""
     device_entry = MagicMock()
@@ -118,6 +125,7 @@ async def test_remove_device_non_domain_identifier() -> None:
 # Test 5: _async_update_listener — early return when runtime_data is None
 # ---------------------------------------------------------------------------
 
+
 async def test_update_listener_no_runtime_data() -> None:
     """Listener returns early when runtime_data is None (entry not set up)."""
     hass = MagicMock()
@@ -133,6 +141,7 @@ async def test_update_listener_no_runtime_data() -> None:
 # ---------------------------------------------------------------------------
 # Test 6: _async_update_listener — triggers reload when runtime_data exists
 # ---------------------------------------------------------------------------
+
 
 async def test_update_listener_triggers_reload() -> None:
     """Listener triggers entry reload when runtime_data is present."""
@@ -151,6 +160,7 @@ async def test_update_listener_triggers_reload() -> None:
 # Test 7: _register_services — early return when already registered
 # ---------------------------------------------------------------------------
 
+
 def test_register_services_early_return() -> None:
     """_register_services is a no-op when services are already registered."""
     hass = _make_mock_hass(services_registered=True)
@@ -161,6 +171,7 @@ def test_register_services_early_return() -> None:
 # ---------------------------------------------------------------------------
 # Test 8: _handle_reset_pid — called for all entries (no entry_id filter)
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_reset_pid_all_entries() -> None:
     """reset_pid service calls coordinator.reset_pid() on all active entries."""
@@ -190,6 +201,7 @@ async def test_handle_reset_pid_all_entries() -> None:
 # ---------------------------------------------------------------------------
 # Test 9: _handle_reset_pid — filtered by entry_id
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_reset_pid_entry_id_filter() -> None:
     """reset_pid with entry_id only resets matching entries."""
@@ -225,6 +237,7 @@ async def test_handle_reset_pid_entry_id_filter() -> None:
 # Test 10: _handle_reset_pid — skips entries without runtime_data
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_reset_pid_no_runtime_data() -> None:
     """reset_pid skips entries where runtime_data is falsy."""
     hass = _make_mock_hass()
@@ -247,6 +260,7 @@ async def test_handle_reset_pid_no_runtime_data() -> None:
 # Test 11: _handle_recalibrate — creates calibration task
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_recalibrate() -> None:
     """recalibrate service creates a calibration task for matching arrays."""
     hass = _make_mock_hass()
@@ -257,8 +271,7 @@ async def test_handle_recalibrate() -> None:
 
     coordinator = MagicMock()
     coordinator.arrays = [array]
-    coordinator.grid_entity = "sensor.grid_power"
-    coordinator.invert_sign = False
+    coordinator.read_grid_w = MagicMock(return_value=0.0)
 
     mock_entry = MagicMock()
     mock_entry.runtime_data = MagicMock()
@@ -287,6 +300,7 @@ async def test_handle_recalibrate() -> None:
 # Test 12: _handle_recalibrate — filters by array_name
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_recalibrate_array_name_filter() -> None:
     """recalibrate with array_name only calibrates matching arrays."""
     hass = _make_mock_hass()
@@ -299,8 +313,7 @@ async def test_handle_recalibrate_array_name_filter() -> None:
 
     coordinator = MagicMock()
     coordinator.arrays = [array_a, array_b]
-    coordinator.grid_entity = "sensor.grid_power"
-    coordinator.invert_sign = False
+    coordinator.read_grid_w = MagicMock(return_value=0.0)
 
     mock_entry = MagicMock()
     mock_entry.runtime_data = MagicMock()
@@ -314,7 +327,9 @@ async def test_handle_recalibrate_array_name_filter() -> None:
 
     handler = hass._captured_handlers[SERVICE_RECALIBRATE]
 
-    with patch("custom_components.zero_grid_controller.ArrayCalibrator") as MockCalibrator:
+    with patch(
+        "custom_components.zero_grid_controller.ArrayCalibrator"
+    ) as MockCalibrator:
         mock_cal = MagicMock()
         mock_cal.run = AsyncMock()
         MockCalibrator.return_value = mock_cal
@@ -326,6 +341,7 @@ async def test_handle_recalibrate_array_name_filter() -> None:
 # ---------------------------------------------------------------------------
 # Test 13: _handle_recalibrate — skips entry without runtime_data
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_recalibrate_no_runtime_data() -> None:
     """recalibrate skips entries without runtime_data."""
@@ -350,6 +366,7 @@ async def test_handle_recalibrate_no_runtime_data() -> None:
 # ---------------------------------------------------------------------------
 # Test 14: _handle_recalibrate — no matching arrays, skips task creation
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_recalibrate_no_matching_arrays() -> None:
     """recalibrate does not create task when no arrays match the filter."""
@@ -379,50 +396,9 @@ async def test_handle_recalibrate_no_matching_arrays() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 15: _handle_set_response_speed — valid speed updates options
+# Test 15: _handle_override_setpoint — with runtime_data
 # ---------------------------------------------------------------------------
 
-async def test_handle_set_response_speed_valid() -> None:
-    """set_response_speed with a valid speed updates entry options."""
-    hass = _make_mock_hass()
-    _register_services(hass)
-
-    mock_entry = MagicMock()
-    mock_entry.options = {}
-    hass.config_entries.async_entries.return_value = [mock_entry]
-
-    call = MagicMock()
-    call.data = {"speed": "fast"}
-
-    handler = hass._captured_handlers[SERVICE_SET_RESPONSE_SPEED]
-    await handler(call)
-
-    hass.config_entries.async_update_entry.assert_called()
-
-
-# ---------------------------------------------------------------------------
-# Test 16: _handle_set_response_speed — unknown speed logs error
-# ---------------------------------------------------------------------------
-
-async def test_handle_set_response_speed_invalid() -> None:
-    """set_response_speed with an unknown speed logs an error and does nothing."""
-    hass = _make_mock_hass()
-    _register_services(hass)
-
-    hass.config_entries.async_entries.return_value = []
-
-    call = MagicMock()
-    call.data = {"speed": "turbo"}  # invalid
-
-    handler = hass._captured_handlers[SERVICE_SET_RESPONSE_SPEED]
-    await handler(call)  # should not raise
-
-    hass.config_entries.async_update_entry.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Test 17: _handle_override_setpoint — with runtime_data
-# ---------------------------------------------------------------------------
 
 async def test_handle_override_setpoint() -> None:
     """override_setpoint service calls coordinator.override_setpoint."""
@@ -448,8 +424,9 @@ async def test_handle_override_setpoint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 18: _handle_override_setpoint — skips entry without runtime_data
+# Test 16: _handle_override_setpoint — skips entry without runtime_data
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_override_setpoint_no_runtime() -> None:
     """override_setpoint skips entries without runtime_data."""
@@ -469,24 +446,20 @@ async def test_handle_override_setpoint_no_runtime() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 19: async_setup_entry — subentry loop covers lines 73-76
+# Test 17: async_setup_entry — subentries produce per-subentry device infos
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    """Enable custom integrations for all tests in this module."""
-    return
 
 
 async def test_setup_entry_with_subentries(hass: HomeAssistant) -> None:
-    """async_setup_entry creates DeviceInfo for ARRAY_SUBENTRY_TYPE subentries only."""
+    """async_setup_entry creates DeviceInfo for array and battery subentries."""
+    from custom_components.zero_grid_controller.const import BATTERY_SUBENTRY_TYPE
+
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
         data={
             "name": "Test ZGC",
-            CONF_GRID_MEASUREMENT_TYPE: "net",
-            CONF_GRID_SENSOR: "sensor.grid_power",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
             CONF_INVERT_SIGN: False,
         },
         options={},
@@ -497,29 +470,46 @@ async def test_setup_entry_with_subentries(hass: HomeAssistant) -> None:
                 "data": {
                     "array_name": "PV West",
                     CONF_SETPOINT_ENTITY: "number.pv_west_limit",
+                    "output_type": "percent",
+                    "settling_time_s": 15,
+                    "setpoint_min": 0.0,
+                    "setpoint_max": 100.0,
+                    "w_per_unit": 10.0,
+                    "calibration_confidence": "estimated",
+                    "enabled": True,
                 },
                 "unique_id": None,
             },
             {
-                "subentry_type": "other_type",
-                "title": "Other",
-                "data": {},
+                "subentry_type": BATTERY_SUBENTRY_TYPE,
+                "title": "Home Battery",
+                "data": {
+                    "name": "Home Battery",
+                    "battery_sensor": "sensor.battery_power",
+                    "battery_max_charge_w": 3000.0,
+                    "battery_max_discharge_w": 3000.0,
+                    "battery_control_enabled": False,
+                },
                 "unique_id": None,
             },
         ],
     )
     entry.add_to_hass(hass)
-    hass.states.async_set("sensor.grid_power", "0")
+    hass.states.async_set("sensor.grid_import", "0")
 
-    # Patch the HA lifecycle methods that are not under test here
-    with patch.object(
-        hass.config_entries, "async_forward_entry_setups", new=AsyncMock(return_value=None)
-    ), patch(
-        "custom_components.zero_grid_controller.ZeroGridCoordinator.async_config_entry_first_refresh",
-        new=AsyncMock(return_value=None),
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "custom_components.zero_grid_controller.ZeroGridCoordinator.async_config_entry_first_refresh",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         result = await async_setup_entry(hass, entry)
 
     assert result is True
-    # Only the ARRAY_SUBENTRY_TYPE subentry should produce an array_device
     assert len(entry.runtime_data.array_devices) == 1
+    assert len(entry.runtime_data.battery_devices) == 1

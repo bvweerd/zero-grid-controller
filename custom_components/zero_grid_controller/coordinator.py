@@ -16,21 +16,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .array import ArrayConfig, array_config_from_subentry
+from .battery import BatteryConfig, battery_config_from_subentry
 from .const import (
     ARRAY_SUBENTRY_TYPE,
-    BATTERY_CLIPPING_THRESHOLD,
-    CONF_BATTERY_CONTROL_ENABLED,
-    CONF_BATTERY_MAX_CHARGE_W,
-    CONF_BATTERY_SENSOR,
-    CONF_BATTERY_SETPOINT_ENTITY,
+    BATTERY_SUBENTRY_TYPE,
     CONF_DEADBAND_W,
     CONF_ESTIMATOR_STATE,
     CONF_EWM_ALPHA,
     CONF_EXPERT_MODE,
-    CONF_GRID_MEASUREMENT_TYPE,
-    CONF_GRID_SENSOR,
-    CONF_GRID_SENSOR_EXPORT,
-    CONF_GRID_SENSOR_IMPORT,
+    CONF_GRID_EXPORT_SENSORS,
+    CONF_GRID_IMPORT_SENSORS,
     CONF_INVERT_SIGN,
     CONF_KD,
     CONF_KI,
@@ -39,13 +34,9 @@ from .const import (
     CONF_MODE_GUARD_ENTITY,
     CONF_MODE_GUARD_MAPPING,
     CONF_OUTPUT_MAX_W,
-    CONF_POWER_CONSUMPTION_SENSORS,
-    CONF_POWER_PRODUCTION_SENSORS,
-    CONF_RESPONSE_FACTOR,
     CONTROL_DT_MAX,
     CONTROL_DT_MIN,
     CONTROL_INTERVAL_S,
-    DEFAULT_BATTERY_MAX_CHARGE_W,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_KD,
@@ -89,6 +80,7 @@ class ZGCResult:
     battery_clipping: bool
     learning_status: str
     setpoints: dict[str, float] = field(default_factory=dict)
+    battery_setpoints: dict[str, float] = field(default_factory=dict)
     array_clipping: dict[str, bool] = field(default_factory=dict)
     array_gain_k: dict[str, float | None] = field(default_factory=dict)
     array_calibration: dict[str, str] = field(default_factory=dict)
@@ -137,35 +129,19 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         )
         self._ewm_alpha = float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
         self._deadband_w = float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
-        self._response_factor = float(
-            data.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR)
-        )
         self._expert_mode: bool = bool(data.get(CONF_EXPERT_MODE, False))
 
         # Grid measurement config
-        self._grid_entity: str = data.get(CONF_GRID_SENSOR, "")
-        self._grid_import_entity: str | None = data.get(CONF_GRID_SENSOR_IMPORT)
-        self._grid_export_entity: str | None = data.get(CONF_GRID_SENSOR_EXPORT)
-        self._measurement_type: str = data.get(CONF_GRID_MEASUREMENT_TYPE, "net")
+        self._import_sensors: list[str] = list(data.get(CONF_GRID_IMPORT_SENSORS) or [])
+        self._export_sensors: list[str] = list(data.get(CONF_GRID_EXPORT_SENSORS) or [])
         self._invert_sign: bool = bool(data.get(CONF_INVERT_SIGN, False))
-        self._consumption_entities: list[str] = list(
-            data.get(CONF_POWER_CONSUMPTION_SENSORS) or []
-        )
-        self._production_entities: list[str] = list(
-            data.get(CONF_POWER_PRODUCTION_SENSORS) or []
-        )
 
-        # Battery config
-        self._battery_entity: str | None = data.get(CONF_BATTERY_SENSOR)
-        self._battery_max_charge_w: float = float(
-            data.get(CONF_BATTERY_MAX_CHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W)
-        )
-        self._battery_control_enabled: bool = bool(
-            data.get(CONF_BATTERY_CONTROL_ENABLED, False)
-        )
-        self._battery_setpoint_entity: str | None = data.get(
-            CONF_BATTERY_SETPOINT_ENTITY
-        )
+        # Batteries from subentries
+        self._batteries: list[BatteryConfig] = [
+            battery_config_from_subentry(s.subentry_id, dict(s.data))
+            for s in entry.subentries.values()
+            if s.subentry_type == BATTERY_SUBENTRY_TYPE
+        ]
 
         # Mode guard config
         self._mode_guard_enabled: bool = bool(data.get(CONF_MODE_GUARD_ENABLED, False))
@@ -178,7 +154,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             for s in entry.subentries.values()
             if s.subentry_type == ARRAY_SUBENTRY_TYPE
         ]
-        self._arrays.sort(key=lambda a: a.priority)
+        # Sort by max power (highest first) for intelligent priority
+        # Arrays with more capacity are served first when distributing setpoints
+        self._arrays.sort(key=lambda a: a.max_power_w, reverse=True)
 
         # Runtime state
         self._filtered_w: float = 0.0
@@ -204,6 +182,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             str, tuple[float, float]
         ] = {}  # name -> (value, expires_at)
         self._grid_unavailable_reported: bool = False
+        self._controller_enabled: bool = True
 
     def reload_config(self) -> None:
         """Re-read config from the config entry (called after options update)."""
@@ -243,6 +222,45 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         """Reset the PID integrator and history."""
         self._pid.reset()
 
+    def set_controller_enabled(self, enabled: bool) -> None:
+        """Enable or disable the controller."""
+        self._controller_enabled = enabled
+
+    async def apply_disabled_state(self) -> None:
+        """Set PV arrays to max and batteries to 0 when controller is disabled."""
+        # Set all PV arrays to maximum output
+        for array in self._arrays:
+            if not array.enabled:
+                continue
+            try:
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {
+                        ATTR_ENTITY_ID: array.setpoint_entity,
+                        "value": array.setpoint_max,
+                    },
+                )
+                _LOGGER.debug(
+                    "Set array %s to max: %.1f", array.name, array.setpoint_max
+                )
+            except Exception as err:
+                _LOGGER.error("Failed to set array %s to max: %s", array.name, err)
+
+        # Set all batteries to 0 W
+        for battery in self._batteries:
+            if not battery.control_enabled or not battery.setpoint_entity:
+                continue
+            try:
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {ATTR_ENTITY_ID: battery.setpoint_entity, "value": 0.0},
+                )
+                _LOGGER.debug("Set battery %s to 0 W", battery.name)
+            except Exception as err:
+                _LOGGER.error("Failed to set battery %s to 0: %s", battery.name, err)
+
     # ------------------------------------------------------------------
     # DataUpdateCoordinator implementation
     # ------------------------------------------------------------------
@@ -264,10 +282,16 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             ) from err
 
     async def _run_control_loop(self, dt: float, now: float) -> ZGCResult:
+        # --- Check if controller is enabled ---
+        if not self._controller_enabled:
+            _LOGGER.debug("Controller is disabled, skipping control loop")
+            self._pid.reset()
+            return self._make_result(0.0, STATUS_DISABLED)
+
         # --- Repair issue tracking ---
         if self._is_grid_sensor_unavailable():
             if not self._grid_unavailable_reported:
-                raise_grid_sensor_unavailable(self.hass, self._grid_entity or "")
+                raise_grid_sensor_unavailable(self.hass)
                 self._grid_unavailable_reported = True
         else:
             if self._grid_unavailable_reported:
@@ -293,8 +317,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             self._pid.freeze_integrator()
             return self._make_result(raw_w, STATUS_DEADBAND)
 
-        # --- 5. Clipping detection ---
+        # --- 5. Clipping & cloud-shadow detection ---
         battery_clipping = self._detect_battery_clipping()
+        # Capture early so _make_result does not repeat the detection
 
         arrays_with_pv = [a for a in self._arrays if a.pv_power_entity]
         pv_clipping_any = False
@@ -337,8 +362,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._update_estimators(written, now)
 
         # --- 10. Optional: write battery setpoint ---
-        if self._battery_control_enabled and self._battery_setpoint_entity:
-            await self._write_battery_target(self._filtered_w)
+        battery_setpoints = await self._write_battery_targets(self._filtered_w)
 
         # --- 11. Persist estimator states (fire-and-forget option update) ---
         self._persist_estimators()
@@ -349,54 +373,41 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             status = STATUS_PASSIVE
         else:
             status = STATUS_ACTIVE
-        return self._make_result(raw_w, status)
+        return self._make_result(raw_w, status, battery_clipping, battery_setpoints)
 
     # ------------------------------------------------------------------
     # Grid reading
     # ------------------------------------------------------------------
 
     def _is_grid_sensor_unavailable(self) -> bool:
-        """Return True if the configured grid sensor(s) are unavailable."""
+        """Return True if any configured import sensor is unavailable."""
 
-        def _unavail(eid: str | None) -> bool:
-            if not eid:
-                return False
+        def _unavail(eid: str) -> bool:
             s = self.hass.states.get(eid)
             return s is None or s.state in ("unknown", "unavailable")
 
-        if self._measurement_type == "split":
-            return _unavail(self._grid_import_entity) or _unavail(
-                self._grid_export_entity
-            )
-        if self._measurement_type == "computed":
-            return any(
-                _unavail(e)
-                for e in self._consumption_entities + self._production_entities
-            )
-        return _unavail(self._grid_entity)
+        return any(_unavail(e) for e in self._import_sensors)
 
     def _read_grid(self) -> float:
         """Read and normalise grid power in Watts.
 
         Positive = importing from grid.
         Negative = exporting to grid.
+        grid_w = sum(import_sensors) - sum(export_sensors)
         """
-        if self._measurement_type == "split":
-            import_w = self._read_sensor_safe(self._grid_import_entity or "", 0.0)
-            export_w = self._read_sensor_safe(self._grid_export_entity or "", 0.0)
-            return import_w - export_w
+        import_w = sum(self._read_sensor_safe(e, 0.0) for e in self._import_sensors)
+        export_w = sum(self._read_sensor_safe(e, 0.0) for e in self._export_sensors)
+        grid_w = import_w - export_w
+        return -grid_w if self._invert_sign else grid_w
 
-        if self._measurement_type == "computed":
-            consumption_w = sum(
-                self._read_sensor_safe(e, 0.0) for e in self._consumption_entities
-            )
-            production_w = sum(
-                self._read_sensor_safe(e, 0.0) for e in self._production_entities
-            )
-            return consumption_w - production_w
+    def read_grid_w(self) -> float | None:
+        """Public method for external grid reading (e.g. calibrator).
 
-        val = self._read_sensor_safe(self._grid_entity, 0.0)
-        return -val if self._invert_sign else val
+        Returns None if any import sensor is unavailable.
+        """
+        if self._is_grid_sensor_unavailable():
+            return None
+        return self._read_grid()
 
     def _read_sensor_safe(self, entity_id: str, default: float) -> float:
         """Read a numeric sensor state, returning default on error."""
@@ -433,11 +444,12 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     # ------------------------------------------------------------------
 
     def _detect_battery_clipping(self) -> bool:
-        """True if the battery is at maximum charge power (absorbing all it can)."""
-        if not self._battery_entity:
-            return False
-        battery_w = self._read_sensor_safe(self._battery_entity, 0.0)
-        return battery_w >= self._battery_max_charge_w * BATTERY_CLIPPING_THRESHOLD
+        """True if any battery is at maximum charge power (absorbing all it can)."""
+        for battery in self._batteries:
+            battery_w = self._read_sensor_safe(battery.sensor_entity, 0.0)
+            if battery.is_clipping(battery_w):
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Setpoint distribution
@@ -476,6 +488,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                     self._current_setpoints.get(a.name, a.setpoint_max)
                 )
             )
+            * a.response_factor
             for a in active
         }
         total = sum(headrooms.values())
@@ -554,7 +567,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                     estimator.update(prev_delta_sp_w, delta_grid)
                     if estimator.is_reliable and not self._expert_mode:
                         old_kp = self._pid.kp
-                        new_kp = estimator.suggest_kp(old_kp, self._response_factor)
+                        new_kp = estimator.suggest_kp(old_kp, DEFAULT_RESPONSE_FACTOR)
                         # Scale Ki proportionally to keep integral time constant Ti = Kp/Ki
                         new_ki = (
                             self._pid.ki * (new_kp / old_kp)
@@ -577,24 +590,69 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     # Battery setpoint
     # ------------------------------------------------------------------
 
-    async def _write_battery_target(self, grid_w: float) -> None:
-        """Write a battery power target to reduce grid imbalance."""
-        if not self._battery_setpoint_entity:
-            return
-        target = _clamp(
-            -grid_w, -self._battery_max_charge_w, self._battery_max_charge_w
-        )
-        await self.hass.services.async_call(
-            "number",
-            "set_value",
-            {ATTR_ENTITY_ID: self._battery_setpoint_entity, "value": target},
-        )
+    async def _write_battery_targets(self, grid_w: float) -> dict[str, float]:
+        """Write battery power targets to reduce grid imbalance.
+
+        Distributes the target across all batteries with control_enabled,
+        proportionally weighted by max power × response_factor.
+        Returns a dict of {battery_name: target_w} for all controlled batteries.
+        """
+        all_batteries = [b for b in self._batteries if b.control_enabled]
+        targets: dict[str, float] = {}
+
+        if not all_batteries:
+            return targets
+
+        # Target is negative grid (if importing, discharge battery)
+        total_target = -grid_w
+
+        # Weighted capacity for proportional distribution
+        if total_target > 0:  # Discharge
+            total_capacity = sum(
+                b.max_discharge_w * b.response_factor for b in all_batteries
+            )
+        else:  # Charge
+            total_capacity = sum(
+                b.max_charge_w * b.response_factor for b in all_batteries
+            )
+
+        if total_capacity <= 0:
+            return targets
+
+        for battery in all_batteries:
+            if total_target > 0:  # Discharge
+                weight = battery.max_discharge_w * battery.response_factor
+                battery_target = _clamp(
+                    total_target * weight / total_capacity, 0, battery.max_discharge_w
+                )
+            else:  # Charge
+                weight = battery.max_charge_w * battery.response_factor
+                battery_target = _clamp(
+                    total_target * weight / total_capacity, -battery.max_charge_w, 0
+                )
+
+            targets[battery.name] = battery_target
+
+            if battery.setpoint_entity:
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {ATTR_ENTITY_ID: battery.setpoint_entity, "value": battery_target},
+                )
+
+        return targets
 
     # ------------------------------------------------------------------
     # Result assembly
     # ------------------------------------------------------------------
 
-    def _make_result(self, raw_w: float, mode: str) -> ZGCResult:
+    def _make_result(
+        self,
+        raw_w: float,
+        mode: str,
+        battery_clipping: bool = False,
+        battery_setpoints: dict[str, float] | None = None,
+    ) -> ZGCResult:
         components = self._pid.components
         any_reliable = any(est.is_reliable for est in self._estimators.values())
         learning_status = "Calibrated \u2713" if any_reliable else "Learning..."
@@ -623,9 +681,10 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             pid_i_w=components["i"],
             pid_d_w=components["d"],
             mode=mode,
-            battery_clipping=self._detect_battery_clipping(),
+            battery_clipping=battery_clipping,
             learning_status=learning_status,
             setpoints=setpoints,
+            battery_setpoints=battery_setpoints or {},
             array_clipping=array_clipping,
             array_gain_k=array_gain_k,
             array_calibration=array_calib,
@@ -638,6 +697,14 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     @property
     def arrays(self) -> list[ArrayConfig]:
         return list(self._arrays)
+
+    @property
+    def batteries(self) -> list[BatteryConfig]:
+        return list(self._batteries)
+
+    @property
+    def controller_enabled(self) -> bool:
+        return self._controller_enabled
 
     @property
     def pid(self) -> PIDController:
@@ -655,15 +722,3 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
     def get_estimator(self, array_name: str) -> RLSEstimator | None:
         return self._estimators.get(array_name)
-
-    @property
-    def grid_entity(self) -> str:
-        return self._grid_entity
-
-    @property
-    def invert_sign(self) -> bool:
-        return self._invert_sign
-
-    @property
-    def measurement_type(self) -> str:
-        return self._measurement_type

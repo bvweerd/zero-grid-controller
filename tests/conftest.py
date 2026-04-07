@@ -1,4 +1,5 @@
 """Shared test fixtures for Zero Grid Controller tests."""
+
 from __future__ import annotations
 
 import pytest

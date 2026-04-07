@@ -1,57 +1,47 @@
 """Tests for Zero Grid Controller entity classes."""
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from custom_components.zero_grid_controller.array import ArrayConfig
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
-    CONF_EWM_ALPHA,
-    CONF_KD,
-    CONF_KI,
     CONF_KP,
-    CONF_DEADBAND_W,
-    CONF_OUTPUT_MAX_W,
     CONF_SETTLING_TIME_S,
     CONF_W_PER_UNIT,
-    DEFAULT_EWM_ALPHA,
-    DEFAULT_KD,
-    DEFAULT_KI,
     DEFAULT_KP,
-    DEFAULT_DEADBAND_W,
-    DEFAULT_OUTPUT_MAX_W,
-    DEFAULT_W_PER_UNIT,
     OUTPUT_TYPE_PERCENT,
-    OUTPUT_TYPE_WATT,
     OUTPUT_TYPE_SWITCH,
-)
-from custom_components.zero_grid_controller.switch import ZGCArrayEnableSwitch
-from custom_components.zero_grid_controller.number import (
-    ZGCKpNumber,
-    ZGCKiNumber,
-    ZGCKdNumber,
-    ZGCEwmAlphaNumber,
-    ZGCDeadbandNumber,
-    ZGCOutputMaxNumber,
-    ZGCArraySettlingTimeNumber,
-    ZGCArrayWPerUnitNumber,
-)
-from custom_components.zero_grid_controller.sensor import (
-    ZGCGridFilteredSensor,
-    ZGCGridRawSensor,
-    ZGCModeSensor,
-    ZGCPIDOutputSensor,
-    ZGCPIDComponentSensor,
-    ZGCBatteryClippingSensor,
-    ZGCLearningSensor,
-    ZGCArraySetpointSensor,
-    ZGCArrayClippingSensor,
-    ZGCArrayGainSensor,
-    ZGCArrayCalibrationSensor,
+    OUTPUT_TYPE_WATT,
 )
 from custom_components.zero_grid_controller.coordinator import ZGCResult
+from custom_components.zero_grid_controller.number import (
+    ZGCArraySettlingTimeNumber,
+    ZGCArrayWPerUnitNumber,
+    ZGCDeadbandNumber,
+    ZGCEwmAlphaNumber,
+    ZGCKdNumber,
+    ZGCKiNumber,
+    ZGCKpNumber,
+    ZGCOutputMaxNumber,
+)
+from custom_components.zero_grid_controller.sensor import (
+    ZGCArrayCalibrationSensor,
+    ZGCArrayClippingSensor,
+    ZGCArrayGainSensor,
+    ZGCArraySetpointSensor,
+    ZGCBatteryClippingSensor,
+    ZGCGridFilteredSensor,
+    ZGCGridRawSensor,
+    ZGCLearningSensor,
+    ZGCModeSensor,
+    ZGCPIDComponentSensor,
+    ZGCPIDOutputSensor,
+)
+from custom_components.zero_grid_controller.switch import ZGCArrayEnableSwitch
 
 
 def _make_array(enabled: bool = True) -> ArrayConfig:
@@ -67,11 +57,12 @@ def _make_array(enabled: bool = True) -> ArrayConfig:
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
-        priority=1,
     )
 
 
-def _make_coordinator(array: ArrayConfig | None = None, data: ZGCResult | None = None) -> MagicMock:
+def _make_coordinator(
+    array: ArrayConfig | None = None, data: ZGCResult | None = None
+) -> MagicMock:
     """Create a mock coordinator."""
     coordinator = MagicMock()
     coordinator.get_array.return_value = array
@@ -92,6 +83,7 @@ def _make_entry(options: dict | None = None, data: dict | None = None) -> MagicM
 # Test 1: ZGCArrayEnableSwitch.is_on — enabled=True
 # ---------------------------------------------------------------------------
 
+
 def test_zgc_array_enable_switch_is_on() -> None:
     """Test that the enable switch reports on when the array is enabled."""
     array = _make_array(enabled=True)
@@ -105,6 +97,7 @@ def test_zgc_array_enable_switch_is_on() -> None:
 # ---------------------------------------------------------------------------
 # Test 2: ZGCArrayEnableSwitch.is_on — enabled=False
 # ---------------------------------------------------------------------------
+
 
 def test_zgc_array_enable_switch_is_off() -> None:
     """Test that the enable switch reports off when the array is disabled."""
@@ -120,6 +113,7 @@ def test_zgc_array_enable_switch_is_off() -> None:
 # Test 3: ZGCKpNumber.native_value — kp in options
 # ---------------------------------------------------------------------------
 
+
 def test_zgc_number_native_value() -> None:
     """Test that ZGCKpNumber returns the kp value from options."""
     coordinator = _make_coordinator()
@@ -132,6 +126,7 @@ def test_zgc_number_native_value() -> None:
 # ---------------------------------------------------------------------------
 # Test 4: ZGCKpNumber.native_value — fallback to default
 # ---------------------------------------------------------------------------
+
 
 def test_zgc_number_default_value() -> None:
     """Test that ZGCKpNumber returns DEFAULT_KP when not set in options."""
@@ -146,6 +141,7 @@ def test_zgc_number_default_value() -> None:
 # Test 5: ZGCGridFilteredSensor.native_value — None when no data
 # ---------------------------------------------------------------------------
 
+
 def test_zgc_grid_filtered_sensor_none_when_no_data() -> None:
     """Test that grid filtered sensor returns None when coordinator.data is None."""
     coordinator = _make_coordinator(data=None)
@@ -158,6 +154,7 @@ def test_zgc_grid_filtered_sensor_none_when_no_data() -> None:
 # ---------------------------------------------------------------------------
 # Test 6: ZGCModeSensor.native_value — returns mode string
 # ---------------------------------------------------------------------------
+
 
 def test_zgc_mode_sensor_returns_mode() -> None:
     """Test that the mode sensor returns the mode from coordinator data."""
@@ -184,7 +181,9 @@ def test_zgc_mode_sensor_returns_mode() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_array_with(output_type=OUTPUT_TYPE_PERCENT, w_per_unit=10.0, enabled=True) -> ArrayConfig:
+def _make_array_with(
+    output_type=OUTPUT_TYPE_PERCENT, w_per_unit=10.0, enabled=True
+) -> ArrayConfig:
     return ArrayConfig(
         name="test",
         enabled=enabled,
@@ -196,7 +195,6 @@ def _make_array_with(output_type=OUTPUT_TYPE_PERCENT, w_per_unit=10.0, enabled=T
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
-        priority=1,
     )
 
 
@@ -243,7 +241,9 @@ async def test_switch_turn_on() -> None:
 
     await switch.async_turn_on()
 
-    coordinator.apply_array_config_update.assert_called_once_with("test_array", {"enabled": True})
+    coordinator.apply_array_config_update.assert_called_once_with(
+        "test_array", {"enabled": True}
+    )
     switch.async_write_ha_state.assert_called_once()
 
 
@@ -260,7 +260,9 @@ async def test_switch_turn_off() -> None:
 
     await switch.async_turn_off()
 
-    coordinator.apply_array_config_update.assert_called_once_with("test_array", {"enabled": False})
+    coordinator.apply_array_config_update.assert_called_once_with(
+        "test_array", {"enabled": False}
+    )
     switch.async_write_ha_state.assert_called_once()
 
 
@@ -280,7 +282,9 @@ def test_switch_is_on_no_array() -> None:
 
 async def test_sensor_setup_entry_with_subentry() -> None:
     """Sensor platform creates per-array entities for subentries."""
-    from custom_components.zero_grid_controller.sensor import async_setup_entry as sensor_setup
+    from custom_components.zero_grid_controller.sensor import (
+        async_setup_entry as sensor_setup,
+    )
 
     coordinator = MagicMock()
     coordinator.get_array.return_value = _make_array()
@@ -311,7 +315,9 @@ async def test_sensor_setup_entry_with_subentry() -> None:
 
 async def test_sensor_setup_entry_subentry_device_none() -> None:
     """Sensor platform skips subentries when device is not found."""
-    from custom_components.zero_grid_controller.sensor import async_setup_entry as sensor_setup
+    from custom_components.zero_grid_controller.sensor import (
+        async_setup_entry as sensor_setup,
+    )
 
     coordinator = MagicMock()
     device = MagicMock()
@@ -345,7 +351,9 @@ async def test_sensor_setup_entry_subentry_device_none() -> None:
 
 async def test_switch_setup_entry_with_subentry() -> None:
     """Switch platform creates enable/disable switch for each subentry."""
-    from custom_components.zero_grid_controller.switch import async_setup_entry as switch_setup
+    from custom_components.zero_grid_controller.switch import (
+        async_setup_entry as switch_setup,
+    )
 
     coordinator = MagicMock()
     array_device = MagicMock()
@@ -367,7 +375,7 @@ async def test_switch_setup_entry_with_subentry() -> None:
     entities_added = []
     await switch_setup(None, entry, lambda e: entities_added.extend(e))
 
-    assert len(entities_added) == 1
+    assert len(entities_added) == 2  # master switch + array switch
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +385,9 @@ async def test_switch_setup_entry_with_subentry() -> None:
 
 async def test_number_setup_entry_with_subentry() -> None:
     """Number platform creates per-array number entities for subentries."""
-    from custom_components.zero_grid_controller.number import async_setup_entry as number_setup
+    from custom_components.zero_grid_controller.number import (
+        async_setup_entry as number_setup,
+    )
 
     coordinator = MagicMock()
     device = MagicMock()
@@ -594,9 +604,15 @@ def test_battery_clipping_sensor_on() -> None:
 def test_battery_clipping_sensor_off() -> None:
     """ZGCBatteryClippingSensor returns 'off' when battery is not clipping."""
     result = ZGCResult(
-        grid_raw_w=0.0, grid_filtered_w=0.0, pid_output_w=0.0,
-        pid_p_w=0.0, pid_i_w=0.0, pid_d_w=0.0,
-        mode="active", battery_clipping=False, learning_status="Learning...",
+        grid_raw_w=0.0,
+        grid_filtered_w=0.0,
+        pid_output_w=0.0,
+        pid_p_w=0.0,
+        pid_i_w=0.0,
+        pid_d_w=0.0,
+        mode="active",
+        battery_clipping=False,
+        learning_status="Learning...",
     )
     coordinator = _make_coordinator(data=result)
     sensor = ZGCBatteryClippingSensor(coordinator, _make_entry(), MagicMock())
@@ -679,7 +695,9 @@ def test_array_setpoint_sensor_missing_setpoint() -> None:
     result = _make_result_with_arrays()
     array = _make_array_with()
     coordinator = _make_coordinator(array=array, data=result)
-    sensor = ZGCArraySetpointSensor(coordinator, _make_entry(), MagicMock(), "PV Unknown")
+    sensor = ZGCArraySetpointSensor(
+        coordinator, _make_entry(), MagicMock(), "PV Unknown"
+    )
     assert sensor.native_value is None
 
 
@@ -709,9 +727,15 @@ def test_array_gain_sensor_with_data() -> None:
 def test_array_gain_sensor_none_gain() -> None:
     """ZGCArrayGainSensor returns None when gain is None (estimator not reliable)."""
     result = ZGCResult(
-        grid_raw_w=0.0, grid_filtered_w=0.0, pid_output_w=0.0,
-        pid_p_w=0.0, pid_i_w=0.0, pid_d_w=0.0,
-        mode="active", battery_clipping=False, learning_status="Learning...",
+        grid_raw_w=0.0,
+        grid_filtered_w=0.0,
+        pid_output_w=0.0,
+        pid_p_w=0.0,
+        pid_i_w=0.0,
+        pid_d_w=0.0,
+        mode="active",
+        battery_clipping=False,
+        learning_status="Learning...",
         array_gain_k={"PV West": None},
     )
     coordinator = _make_coordinator(data=result)
@@ -730,14 +754,18 @@ def test_array_calibration_sensor_with_data() -> None:
     """ZGCArrayCalibrationSensor returns the calibration confidence string."""
     result = _make_result_with_arrays()
     coordinator = _make_coordinator(data=result)
-    sensor = ZGCArrayCalibrationSensor(coordinator, _make_entry(), MagicMock(), "PV West")
+    sensor = ZGCArrayCalibrationSensor(
+        coordinator, _make_entry(), MagicMock(), "PV West"
+    )
     assert sensor.native_value == "measured"
 
 
 def test_array_calibration_sensor_no_data() -> None:
     """ZGCArrayCalibrationSensor returns None when coordinator.data is None."""
     coordinator = _make_coordinator(data=None)
-    sensor = ZGCArrayCalibrationSensor(coordinator, _make_entry(), MagicMock(), "PV West")
+    sensor = ZGCArrayCalibrationSensor(
+        coordinator, _make_entry(), MagicMock(), "PV West"
+    )
     assert sensor.native_value is None
 
 
@@ -781,7 +809,9 @@ def test_array_setpoint_sensor_no_data() -> None:
 
 async def test_sensor_setup_entry_skips_wrong_subentry_type() -> None:
     """Sensor platform skips subentries with non-ARRAY_SUBENTRY_TYPE."""
-    from custom_components.zero_grid_controller.sensor import async_setup_entry as sensor_setup
+    from custom_components.zero_grid_controller.sensor import (
+        async_setup_entry as sensor_setup,
+    )
 
     coordinator = MagicMock()
     device = MagicMock()
@@ -808,7 +838,9 @@ async def test_sensor_setup_entry_skips_wrong_subentry_type() -> None:
 
 async def test_switch_setup_entry_skips_wrong_subentry_type() -> None:
     """Switch platform skips subentries with non-ARRAY_SUBENTRY_TYPE."""
-    from custom_components.zero_grid_controller.switch import async_setup_entry as switch_setup
+    from custom_components.zero_grid_controller.switch import (
+        async_setup_entry as switch_setup,
+    )
 
     coordinator = MagicMock()
     runtime_data = MagicMock()
@@ -826,12 +858,14 @@ async def test_switch_setup_entry_skips_wrong_subentry_type() -> None:
     entities_added = []
     await switch_setup(None, entry, lambda e: entities_added.extend(e))
 
-    assert len(entities_added) == 0
+    assert len(entities_added) == 1  # master switch always created
 
 
 async def test_switch_setup_entry_skips_missing_device() -> None:
     """Switch platform skips subentries when device is not found in array_devices."""
-    from custom_components.zero_grid_controller.switch import async_setup_entry as switch_setup
+    from custom_components.zero_grid_controller.switch import (
+        async_setup_entry as switch_setup,
+    )
 
     coordinator = MagicMock()
     runtime_data = MagicMock()
@@ -851,12 +885,16 @@ async def test_switch_setup_entry_skips_missing_device() -> None:
     entities_added = []
     await switch_setup(None, entry, lambda e: entities_added.extend(e))
 
-    assert len(entities_added) == 0
+    assert (
+        len(entities_added) == 1
+    )  # master switch always created, array skipped (no device)
 
 
 async def test_number_setup_entry_skips_wrong_subentry_type() -> None:
     """Number platform skips subentries with non-ARRAY_SUBENTRY_TYPE."""
-    from custom_components.zero_grid_controller.number import async_setup_entry as number_setup
+    from custom_components.zero_grid_controller.number import (
+        async_setup_entry as number_setup,
+    )
 
     coordinator = MagicMock()
     device = MagicMock()
@@ -882,7 +920,9 @@ async def test_number_setup_entry_skips_wrong_subentry_type() -> None:
 
 async def test_number_setup_entry_skips_missing_device() -> None:
     """Number platform skips subentries when device is not found."""
-    from custom_components.zero_grid_controller.number import async_setup_entry as number_setup
+    from custom_components.zero_grid_controller.number import (
+        async_setup_entry as number_setup,
+    )
 
     coordinator = MagicMock()
     device = MagicMock()

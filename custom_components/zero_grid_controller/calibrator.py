@@ -81,8 +81,7 @@ class ArrayCalibrator:
         self,
         hass: HomeAssistant,
         arrays: list[ArrayConfig],
-        grid_entity: str,
-        invert_sign: bool,
+        read_grid: Callable[[], float | None],
         progress_callback: Callable[[str, float], None],
     ) -> dict[str, CalibrationResult]:
         """Run calibration for all arrays and return results keyed by array name."""
@@ -102,8 +101,7 @@ class ArrayCalibrator:
             result = await self._calibrate_array(
                 hass,
                 array,
-                grid_entity,
-                invert_sign,
+                read_grid,
                 lambda msg, p, bp=base_progress: progress_callback(msg, bp + p / n),  # type: ignore[misc]
             )
             results[array.name] = result
@@ -131,8 +129,7 @@ class ArrayCalibrator:
         self,
         hass: HomeAssistant,
         array: ArrayConfig,
-        grid_entity: str,
-        invert_sign: bool,
+        read_grid: Callable[[], float | None],
         progress_callback: Callable[[str, float], None],
     ) -> CalibrationResult:
         """Calibrate a single array. Returns a CalibrationResult."""
@@ -145,7 +142,7 @@ class ArrayCalibrator:
 
         # --- Step 1: wait for stable conditions ---
         progress_callback("calibration_waiting_sun", 0.0)
-        stable = await self._wait_for_stable(hass, array, grid_entity, invert_sign)
+        stable = await self._wait_for_stable(hass, array, read_grid)
         if not stable:
             return CalibrationResult(
                 w_per_unit=DEFAULT_W_PER_UNIT,
@@ -166,7 +163,7 @@ class ArrayCalibrator:
         # --- Step 3: measure baseline grid_w ---
         progress_callback("calibration_measuring_baseline", 0.1)
         baseline = await self._measure_grid_avg(
-            hass, grid_entity, invert_sign, samples=CALIB_BASELINE_SAMPLES
+            read_grid, samples=CALIB_BASELINE_SAMPLES
         )
         if baseline is None:
             return default
@@ -211,7 +208,7 @@ class ArrayCalibrator:
         while elapsed < CALIB_MAX_TIME_S and not self._abort:
             await asyncio.sleep(1.0)
             elapsed = time.monotonic() - start_t
-            grid_w = self._read_grid(hass, grid_entity, invert_sign)
+            grid_w = read_grid()
             if grid_w is None:
                 continue
 
@@ -279,8 +276,7 @@ class ArrayCalibrator:
         self,
         hass: HomeAssistant,
         array: ArrayConfig,
-        grid_entity: str,
-        invert_sign: bool,
+        read_grid: Callable[[], float | None],
     ) -> bool:
         """Wait up to _STABLE_WINDOW_S for stable PV output.
 
@@ -290,7 +286,7 @@ class ArrayCalibrator:
             # No PV sensor — check grid stability instead of blindly waiting
             grid_samples: deque[float] = deque(maxlen=CALIB_STABLE_WINDOW_S)
             for _ in range(CALIB_STABLE_WINDOW_S):
-                val = self._read_grid(hass, grid_entity, invert_sign)
+                val = read_grid()
                 if val is not None:
                     grid_samples.append(val)
                 await asyncio.sleep(1.0)
@@ -329,36 +325,19 @@ class ArrayCalibrator:
 
     async def _measure_grid_avg(
         self,
-        hass: HomeAssistant,
-        grid_entity: str,
-        invert_sign: bool,
+        read_grid: Callable[[], float | None],
         samples: int = 10,
     ) -> float | None:
         """Measure average grid_w over `samples` seconds."""
         readings: list[float] = []
         for _ in range(samples):
-            val = self._read_grid(hass, grid_entity, invert_sign)
+            val = read_grid()
             if val is not None:
                 readings.append(val)
             await asyncio.sleep(1.0)
         if not readings:
             return None
         return sum(readings) / len(readings)
-
-    def _read_grid(
-        self,
-        hass: HomeAssistant,
-        grid_entity: str,
-        invert_sign: bool,
-    ) -> float | None:
-        state = hass.states.get(grid_entity)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return None
-        try:
-            val = float(state.state)
-            return -val if invert_sign else val
-        except ValueError:
-            return None
 
     def _read_setpoint(self, hass: HomeAssistant, array: ArrayConfig) -> float | None:
         state = hass.states.get(array.setpoint_entity)

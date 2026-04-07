@@ -16,7 +16,12 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ARRAY_SUBENTRY_TYPE, OUTPUT_TYPE_PERCENT, OUTPUT_TYPE_WATT
+from .const import (
+    ARRAY_SUBENTRY_TYPE,
+    BATTERY_SUBENTRY_TYPE,
+    OUTPUT_TYPE_PERCENT,
+    OUTPUT_TYPE_WATT,
+)
 from .coordinator import ZeroGridCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +38,7 @@ async def async_setup_entry(
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
     array_devices: dict[str, DeviceInfo] = entry.runtime_data.array_devices
+    battery_devices: dict[str, DeviceInfo] = entry.runtime_data.battery_devices
 
     entities: list[SensorEntity] = [
         # Main device sensors
@@ -49,18 +55,25 @@ async def async_setup_entry(
 
     # Per-array sensors
     for subentry in entry.subentries.values():
-        if subentry.subentry_type != ARRAY_SUBENTRY_TYPE:
-            continue
-        array_name = subentry.data.get("array_name", subentry.subentry_id)
-        device = array_devices.get(subentry.subentry_id)
-        if device is None:
-            continue
-        entities += [
-            ZGCArraySetpointSensor(coordinator, entry, device, array_name),
-            ZGCArrayClippingSensor(coordinator, entry, device, array_name),
-            ZGCArrayGainSensor(coordinator, entry, device, array_name),
-            ZGCArrayCalibrationSensor(coordinator, entry, device, array_name),
-        ]
+        if subentry.subentry_type == ARRAY_SUBENTRY_TYPE:
+            array_name = subentry.data.get("array_name", subentry.subentry_id)
+            device = array_devices.get(subentry.subentry_id)
+            if device is None:
+                continue
+            entities += [
+                ZGCArraySetpointSensor(coordinator, entry, device, array_name),
+                ZGCArrayClippingSensor(coordinator, entry, device, array_name),
+                ZGCArrayGainSensor(coordinator, entry, device, array_name),
+                ZGCArrayCalibrationSensor(coordinator, entry, device, array_name),
+            ]
+        elif subentry.subentry_type == BATTERY_SUBENTRY_TYPE:
+            battery_name = subentry.data.get("name", subentry.title)
+            device = battery_devices.get(subentry.subentry_id)
+            if device is None:
+                continue
+            entities.append(
+                ZGCBatterySetpointSensor(coordinator, entry, device, battery_name)
+            )
 
     async_add_entities(entities)
 
@@ -360,3 +373,35 @@ class ZGCArrayCalibrationSensor(ZGCArraySensorBase):
             return None
         cal: str | None = self.coordinator.data.array_calibration.get(self._array_name)
         return cal
+
+
+# ---------------------------------------------------------------------------
+# Per-battery sensors
+# ---------------------------------------------------------------------------
+
+
+class ZGCBatterySetpointSensor(ZGCSensorBase):
+    """Current setpoint target for a battery (in Watts, positive = charging)."""
+
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        coordinator: ZeroGridCoordinator,
+        entry: ConfigEntry,
+        device: DeviceInfo,
+        battery_name: str,
+    ) -> None:
+        super().__init__(coordinator, entry, device, f"{battery_name}_battery_setpoint")
+        self._battery_name = battery_name
+        self._attr_translation_key = "battery_setpoint"
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        sp = self.coordinator.data.battery_setpoints.get(self._battery_name)
+        return round(sp, 1) if sp is not None else None

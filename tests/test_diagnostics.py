@@ -1,4 +1,5 @@
 """Tests for the diagnostics module."""
+
 from __future__ import annotations
 
 import time
@@ -6,12 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.zero_grid_controller.coordinator import ZGCResult
 from custom_components.zero_grid_controller.diagnostics import (
     async_get_config_entry_diagnostics,
 )
-from custom_components.zero_grid_controller.coordinator import ZGCResult
 from custom_components.zero_grid_controller.estimator import RLSEstimator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,9 +66,7 @@ def _make_coordinator_mock(with_data: bool = True) -> MagicMock:
     coordinator.arrays = [array]
 
     # Override setpoints
-    coordinator._override_setpoints = {
-        "PV West": (40.0, time.monotonic() + 300.0)
-    }
+    coordinator._override_setpoints = {"PV West": (40.0, time.monotonic() + 300.0)}
 
     # Settling until
     coordinator._settling_until = {"PV West": time.monotonic() + 10.0}
@@ -106,6 +104,7 @@ def _make_entry_mock(coordinator) -> MagicMock:
 # ---------------------------------------------------------------------------
 # Test 1: Full diagnostics with coordinator data
 # ---------------------------------------------------------------------------
+
 
 async def test_diagnostics_with_data() -> None:
     """Diagnostics returns structured data when coordinator has data."""
@@ -166,6 +165,7 @@ async def test_diagnostics_with_data() -> None:
 # Test 2: Diagnostics with coordinator that has no data yet
 # ---------------------------------------------------------------------------
 
+
 async def test_diagnostics_coordinator_no_data() -> None:
     """Diagnostics handles coordinator with data=None gracefully."""
     coordinator = _make_coordinator_mock(with_data=False)
@@ -198,6 +198,7 @@ async def test_diagnostics_coordinator_no_data() -> None:
 # ---------------------------------------------------------------------------
 # Test 3: Diagnostics without runtime_data
 # ---------------------------------------------------------------------------
+
 
 async def test_diagnostics_no_runtime_data() -> None:
     """Diagnostics handles None runtime_data gracefully."""
@@ -237,6 +238,7 @@ async def test_diagnostics_no_runtime_data() -> None:
 # ---------------------------------------------------------------------------
 # Test 4: Diagnostics with repair issues
 # ---------------------------------------------------------------------------
+
 
 async def test_diagnostics_with_repair_issues() -> None:
     """Diagnostics includes repair issues from the issue registry."""
@@ -282,6 +284,7 @@ async def test_diagnostics_with_repair_issues() -> None:
 # Test 5: Diagnostics with update_interval set on coordinator
 # ---------------------------------------------------------------------------
 
+
 async def test_diagnostics_coordinator_timing() -> None:
     """Diagnostics captures coordinator timing info."""
     coordinator = _make_coordinator_mock(with_data=False)
@@ -310,12 +313,16 @@ async def test_diagnostics_coordinator_timing() -> None:
         )
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-    assert result["coordinator_timing"]["last_update_success_time"] == "2026-04-06T12:00:00"
+    assert (
+        result["coordinator_timing"]["last_update_success_time"]
+        == "2026-04-06T12:00:00"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Test 6: Diagnostics with entity registry entries
 # ---------------------------------------------------------------------------
+
 
 async def test_diagnostics_with_entities() -> None:
     """Diagnostics includes entities from the entity registry."""
@@ -357,6 +364,7 @@ async def test_diagnostics_with_entities() -> None:
 # ---------------------------------------------------------------------------
 # Test 7: Diagnostics with reliable estimator
 # ---------------------------------------------------------------------------
+
 
 async def test_diagnostics_reliable_estimator() -> None:
     """Diagnostics shows suggested_kp when estimator is reliable."""
@@ -400,9 +408,11 @@ async def test_diagnostics_reliable_estimator() -> None:
 # Test (repairs): dismiss_grid_sensor_unavailable deletes the issue (line 27)
 # ---------------------------------------------------------------------------
 
+
 async def test_dismiss_grid_sensor_unavailable(hass) -> None:
     """dismiss_grid_sensor_unavailable calls async_delete_issue (covers repairs.py:27)."""
     from homeassistant.helpers.issue_registry import async_get as ir_async_get
+
     from custom_components.zero_grid_controller.const import DOMAIN
     from custom_components.zero_grid_controller.repairs import (
         ISSUE_GRID_SENSOR_UNAVAILABLE,
@@ -411,7 +421,7 @@ async def test_dismiss_grid_sensor_unavailable(hass) -> None:
     )
 
     # First create the issue so there's something to dismiss
-    raise_grid_sensor_unavailable(hass, "sensor.grid_power")
+    raise_grid_sensor_unavailable(hass)
     ir = ir_async_get(hass)
     assert ir.async_get_issue(DOMAIN, ISSUE_GRID_SENSOR_UNAVAILABLE) is not None
 

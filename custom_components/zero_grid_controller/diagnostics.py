@@ -14,17 +14,16 @@ from homeassistant.helpers.issue_registry import async_get as ir_async_get
 from .const import (
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
-    CONF_GRID_SENSOR,
-    CONF_GRID_SENSOR_EXPORT,
-    CONF_GRID_SENSOR_IMPORT,
+    CONF_GRID_EXPORT_SENSORS,
+    CONF_GRID_IMPORT_SENSORS,
     CONF_MODE_GUARD_ENTITY,
+    DEFAULT_RESPONSE_FACTOR,
     DOMAIN,
 )
 
 TO_REDACT: set[str] = {
-    CONF_GRID_SENSOR,
-    CONF_GRID_SENSOR_IMPORT,
-    CONF_GRID_SENSOR_EXPORT,
+    CONF_GRID_IMPORT_SENSORS,
+    CONF_GRID_EXPORT_SENSORS,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
     CONF_MODE_GUARD_ENTITY,
@@ -80,7 +79,7 @@ async def async_get_config_entry_diagnostics(
                 "setpoint_min": array.setpoint_min,
                 "setpoint_max": array.setpoint_max,
                 "settling_time_s": array.settling_time_s,
-                "priority": array.priority,
+                "max_power_w": array.max_power_w,
                 "enabled": array.enabled,
             }
 
@@ -112,7 +111,7 @@ async def async_get_config_entry_diagnostics(
                 est_dict["is_reliable"] = est.is_reliable
                 est_dict["estimated_gain"] = est.estimated_gain
                 est_dict["suggested_kp"] = est.suggest_kp(
-                    coordinator.pid.kp, coordinator._response_factor
+                    coordinator.pid.kp, DEFAULT_RESPONSE_FACTOR
                 )
                 estimator_states[array.name] = est_dict
 

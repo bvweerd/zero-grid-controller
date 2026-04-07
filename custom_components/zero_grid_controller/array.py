@@ -33,7 +33,10 @@ class ArrayConfig:
     setpoint_min: float
     setpoint_max: float
     settling_time_s: int
-    priority: int  # 1 = highest priority (served first)
+
+    response_factor: float = (
+        1.0  # Weighting for setpoint distribution (0.5=cautious, 1.0=normal, 2.0=fast)
+    )
 
     # Switch-specific
     switch_on_threshold_w: float = DEFAULT_SWITCH_ON_THRESHOLD_W
@@ -43,6 +46,14 @@ class ArrayConfig:
     # ------------------------------------------------------------------
     # Convenience methods
     # ------------------------------------------------------------------
+
+    @property
+    def max_power_w(self) -> float:
+        """Maximum power capacity in Watts (used for automatic priority sorting).
+
+        Arrays with higher max power are served first when distributing setpoints.
+        """
+        return self.setpoint_max * self.w_per_unit
 
     def is_clipping_active(self, current_setpoint_w: float, pv_power_w: float) -> bool:
         """Return True if our limit is actually constraining the inverter.
@@ -82,8 +93,8 @@ def array_config_from_subentry(
         CONF_ARRAY_NAME,
         CONF_CALIBRATION_CONFIDENCE,
         CONF_OUTPUT_TYPE,
-        CONF_PRIORITY,
         CONF_PV_POWER_ENTITY,
+        CONF_RESPONSE_FACTOR,
         CONF_SETPOINT_ENTITY,
         CONF_SETPOINT_MAX,
         CONF_SETPOINT_MIN,
@@ -92,6 +103,7 @@ def array_config_from_subentry(
         CONF_SWITCH_OFF_THRESHOLD_W,
         CONF_SWITCH_ON_THRESHOLD_W,
         CONF_W_PER_UNIT,
+        DEFAULT_RESPONSE_FACTOR,
     )
 
     return ArrayConfig(
@@ -105,7 +117,7 @@ def array_config_from_subentry(
         setpoint_min=float(data.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN)),
         setpoint_max=float(data.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)),
         settling_time_s=int(data.get(CONF_SETTLING_TIME_S, DEFAULT_SETTLING_TIME_S)),
-        priority=int(data.get(CONF_PRIORITY, 1)),
+        response_factor=float(data.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR)),
         switch_on_threshold_w=float(
             data.get(CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W)
         ),

@@ -5,20 +5,13 @@ from homeassistant.const import Platform
 DOMAIN = "zero_grid_controller"
 
 ARRAY_SUBENTRY_TYPE = "array"
+BATTERY_SUBENTRY_TYPE = "battery"
 
 # Config keys — main entry
 CONF_NAME = "name"
-CONF_GRID_SENSOR = "grid_sensor"
-CONF_GRID_SENSOR_IMPORT = "grid_sensor_import"
-CONF_GRID_SENSOR_EXPORT = "grid_sensor_export"
-CONF_GRID_MEASUREMENT_TYPE = "grid_measurement_type"  # "net" | "split" | "computed"
+CONF_GRID_IMPORT_SENSORS = "grid_import_sensors"  # list[str]: sensors summed for import
+CONF_GRID_EXPORT_SENSORS = "grid_export_sensors"  # list[str]: sensors summed for export
 CONF_INVERT_SIGN = "invert_sign"
-CONF_POWER_CONSUMPTION_SENSORS = (
-    "power_consumption_sensors"  # list[str], for "computed" type
-)
-CONF_POWER_PRODUCTION_SENSORS = (
-    "power_production_sensors"  # list[str], for "computed" type
-)
 
 # Battery config
 CONF_BATTERY_SENSOR = "battery_sensor"
@@ -57,7 +50,6 @@ CONF_SETPOINT_MAX = "setpoint_max"
 CONF_SETTLING_TIME_S = "settling_time_s"
 CONF_W_PER_UNIT = "w_per_unit"
 CONF_CALIBRATION_CONFIDENCE = "calibration_confidence"
-CONF_PRIORITY = "priority"
 CONF_INVERTER_SPEED = "inverter_speed"  # "slow" | "normal" | "fast"
 
 # Switch config
@@ -81,7 +73,6 @@ DEFAULT_SWITCH_ON_THRESHOLD_W = 100.0
 DEFAULT_SWITCH_OFF_THRESHOLD_W = 50.0
 DEFAULT_SWITCH_DEBOUNCE_S = 30
 DEFAULT_BATTERY_MAX_CHARGE_W = 5000.0
-DEFAULT_PRIORITY = 1
 CALIBRATION_CONFIDENCE_ESTIMATED = "estimated"
 
 # Calibration constants
@@ -184,10 +175,10 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.NUMBER,
     Platform.SWITCH,
+    Platform.BUTTON,
 ]
 
 # Services
 SERVICE_RESET_PID = "reset_pid"
 SERVICE_RECALIBRATE = "recalibrate"
-SERVICE_SET_RESPONSE_SPEED = "set_response_speed"
 SERVICE_OVERRIDE_SETPOINT = "override_setpoint"

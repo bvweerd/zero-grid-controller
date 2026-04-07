@@ -1,4 +1,5 @@
 """Tests for the ZeroGridCoordinator."""
+
 from __future__ import annotations
 
 import time
@@ -10,14 +11,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
     CONF_ARRAY_NAME,
-    CONF_GRID_MEASUREMENT_TYPE,
-    CONF_GRID_SENSOR,
-    CONF_GRID_SENSOR_EXPORT,
-    CONF_GRID_SENSOR_IMPORT,
+    CONF_GRID_EXPORT_SENSORS,
+    CONF_GRID_IMPORT_SENSORS,
     CONF_INVERT_SIGN,
     CONF_OUTPUT_TYPE,
-    CONF_POWER_CONSUMPTION_SENSORS,
-    CONF_POWER_PRODUCTION_SENSORS,
     CONF_SETPOINT_ENTITY,
     DOMAIN,
     OUTPUT_TYPE_PERCENT,
@@ -31,18 +28,42 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     return
 
 
-def _make_entry(hass: HomeAssistant, data: dict | None = None, subentries_data=None) -> MockConfigEntry:
-    """Create and register a MockConfigEntry."""
+def _array_subentry_data(name: str = "Roof South") -> dict:
+    return {
+        "subentry_type": ARRAY_SUBENTRY_TYPE,
+        "title": name,
+        "data": {
+            CONF_ARRAY_NAME: name,
+            CONF_SETPOINT_ENTITY: "number.inverter_limit",
+            CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
+            "settling_time_s": 15,
+            "setpoint_min": 0.0,
+            "setpoint_max": 100.0,
+            "w_per_unit": 10.0,
+            "calibration_confidence": "estimated",
+            "enabled": True,
+        },
+        "unique_id": None,
+    }
+
+
+def _make_entry(
+    hass: HomeAssistant,
+    data: dict | None = None,
+    options: dict | None = None,
+    subentries_data=None,
+) -> MockConfigEntry:
+    """Create and register a MockConfigEntry with the new import/export sensor config."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
-        data=data or {
+        data=data
+        or {
             "name": "Test ZGC",
-            CONF_GRID_MEASUREMENT_TYPE: "net",
-            CONF_GRID_SENSOR: "sensor.grid_power",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
             CONF_INVERT_SIGN: False,
         },
-        options={},
+        options=options or {},
         subentries_data=subentries_data or (),
     )
     entry.add_to_hass(hass)
@@ -53,6 +74,7 @@ def _make_entry(hass: HomeAssistant, data: dict | None = None, subentries_data=N
 # Test 1: Coordinator instantiates — arrays empty without subentries
 # ---------------------------------------------------------------------------
 
+
 async def test_coordinator_init(hass: HomeAssistant) -> None:
     """Test that a coordinator can be instantiated and arrays list is empty."""
     entry = _make_entry(hass)
@@ -61,13 +83,14 @@ async def test_coordinator_init(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 2: _read_grid — net mode, normal state
+# Test 2: _read_grid — single import sensor
 # ---------------------------------------------------------------------------
 
-async def test_read_grid_net_mode(hass: HomeAssistant) -> None:
-    """Test that _read_grid returns the sensor value in net mode."""
+
+async def test_read_grid_single_import(hass: HomeAssistant) -> None:
+    """Test that _read_grid returns the import sensor value."""
     entry = _make_entry(hass)
-    hass.states.async_set("sensor.grid_power", "150.0")
+    hass.states.async_set("sensor.grid_import", "150.0")
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._read_grid() == 150.0
 
@@ -76,32 +99,38 @@ async def test_read_grid_net_mode(hass: HomeAssistant) -> None:
 # Test 3: _read_grid — inverted sign
 # ---------------------------------------------------------------------------
 
-async def test_read_grid_net_inverted(hass: HomeAssistant) -> None:
+
+async def test_read_grid_inverted(hass: HomeAssistant) -> None:
     """Test that _read_grid inverts sign when invert_sign=True."""
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: True,
-    })
-    hass.states.async_set("sensor.grid_power", "150.0")
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_INVERT_SIGN: True,
+        },
+    )
+    hass.states.async_set("sensor.grid_import", "150.0")
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._read_grid() == -150.0
 
 
 # ---------------------------------------------------------------------------
-# Test 4: _read_grid — split mode
+# Test 4: _read_grid — import minus export
 # ---------------------------------------------------------------------------
 
-async def test_read_grid_split_mode(hass: HomeAssistant) -> None:
-    """Test _read_grid with split measurement (import - export)."""
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "split",
-        CONF_GRID_SENSOR_IMPORT: "sensor.grid_import",
-        CONF_GRID_SENSOR_EXPORT: "sensor.grid_export",
-        CONF_INVERT_SIGN: False,
-    })
+
+async def test_read_grid_import_minus_export(hass: HomeAssistant) -> None:
+    """Test _read_grid with separate import and export sensors."""
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_GRID_EXPORT_SENSORS: ["sensor.grid_export"],
+            CONF_INVERT_SIGN: False,
+        },
+    )
     hass.states.async_set("sensor.grid_import", "300.0")
     hass.states.async_set("sensor.grid_export", "100.0")
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -109,33 +138,35 @@ async def test_read_grid_split_mode(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 5: _read_grid — computed mode
+# Test 5: _read_grid — multiple import sensors summed
 # ---------------------------------------------------------------------------
 
-async def test_read_grid_computed_mode(hass: HomeAssistant) -> None:
-    """Test _read_grid with computed mode (consumption - production)."""
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "computed",
-        CONF_POWER_CONSUMPTION_SENSORS: ["sensor.cons1", "sensor.cons2"],
-        CONF_POWER_PRODUCTION_SENSORS: ["sensor.prod1"],
-        CONF_INVERT_SIGN: False,
-    })
-    hass.states.async_set("sensor.cons1", "400.0")
-    hass.states.async_set("sensor.cons2", "100.0")
-    hass.states.async_set("sensor.prod1", "300.0")
+
+async def test_read_grid_multiple_import_sensors(hass: HomeAssistant) -> None:
+    """Test _read_grid sums multiple import sensors."""
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.import1", "sensor.import2"],
+            CONF_INVERT_SIGN: False,
+        },
+    )
+    hass.states.async_set("sensor.import1", "200.0")
+    hass.states.async_set("sensor.import2", "50.0")
     coordinator = ZeroGridCoordinator(hass, entry)
-    assert coordinator._read_grid() == 200.0
+    assert coordinator._read_grid() == 250.0
 
 
 # ---------------------------------------------------------------------------
-# Test 6: _read_grid — unavailable state returns 0.0
+# Test 6: _read_grid — unavailable state returns 0.0 (default)
 # ---------------------------------------------------------------------------
+
 
 async def test_read_grid_unavailable_returns_zero(hass: HomeAssistant) -> None:
-    """Test that an unavailable sensor state returns 0.0 (default)."""
+    """Test that an unavailable import sensor contributes 0 W."""
     entry = _make_entry(hass)
-    hass.states.async_set("sensor.grid_power", "unavailable")
+    hass.states.async_set("sensor.grid_import", "unavailable")
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._read_grid() == 0.0
 
@@ -144,29 +175,11 @@ async def test_read_grid_unavailable_returns_zero(hass: HomeAssistant) -> None:
 # Test 7: apply_array_config_update changes array parameter
 # ---------------------------------------------------------------------------
 
+
 async def test_apply_array_config_update(hass: HomeAssistant) -> None:
     """Test that apply_array_config_update modifies the array config in-place."""
-    entry = _make_entry(hass, subentries_data=[
-        {
-            "subentry_type": ARRAY_SUBENTRY_TYPE,
-            "title": "Roof South",
-            "data": {
-                CONF_ARRAY_NAME: "Roof South",
-                CONF_SETPOINT_ENTITY: "number.inverter_limit",
-                CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-                "settling_time_s": 15,
-                "setpoint_min": 0.0,
-                "setpoint_max": 100.0,
-                "priority": 1,
-                "w_per_unit": 10.0,
-                "calibration_confidence": "estimated",
-                "enabled": True,
-            },
-            "unique_id": None,
-        }
-    ])
+    entry = _make_entry(hass, subentries_data=[_array_subentry_data()])
     coordinator = ZeroGridCoordinator(hass, entry)
-    assert len(coordinator.arrays) == 1
     assert coordinator.arrays[0].settling_time_s == 15
 
     coordinator.apply_array_config_update("Roof South", {"settling_time_s": 30})
@@ -176,6 +189,7 @@ async def test_apply_array_config_update(hass: HomeAssistant) -> None:
 # ---------------------------------------------------------------------------
 # Test 8: override_setpoint populates _override_setpoints
 # ---------------------------------------------------------------------------
+
 
 async def test_override_setpoint(hass: HomeAssistant) -> None:
     """Test that override_setpoint stores a value with expiry."""
@@ -193,12 +207,12 @@ async def test_override_setpoint(hass: HomeAssistant) -> None:
 # Test 9: reset_pid zeros the integral
 # ---------------------------------------------------------------------------
 
+
 async def test_reset_pid(hass: HomeAssistant) -> None:
     """Test that reset_pid clears the PID integrator."""
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
 
-    # Run a compute to build up integral
     coordinator.pid.compute(100.0, 5.0)
     assert coordinator.pid.integral != 0.0
 
@@ -210,10 +224,11 @@ async def test_reset_pid(hass: HomeAssistant) -> None:
 # Test 10: _is_grid_sensor_unavailable — returns True for unavailable
 # ---------------------------------------------------------------------------
 
+
 async def test_is_grid_sensor_unavailable_true(hass: HomeAssistant) -> None:
-    """Test _is_grid_sensor_unavailable returns True when sensor is unavailable."""
+    """_is_grid_sensor_unavailable returns True when sensor is unavailable."""
     entry = _make_entry(hass)
-    hass.states.async_set("sensor.grid_power", "unavailable")
+    hass.states.async_set("sensor.grid_import", "unavailable")
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._is_grid_sensor_unavailable() is True
 
@@ -222,35 +237,37 @@ async def test_is_grid_sensor_unavailable_true(hass: HomeAssistant) -> None:
 # Test 11: _is_grid_sensor_unavailable — returns False for valid state
 # ---------------------------------------------------------------------------
 
+
 async def test_is_grid_sensor_unavailable_false(hass: HomeAssistant) -> None:
-    """Test _is_grid_sensor_unavailable returns False when sensor is available."""
+    """_is_grid_sensor_unavailable returns False when sensor is available."""
     entry = _make_entry(hass)
-    hass.states.async_set("sensor.grid_power", "150.0")
+    hass.states.async_set("sensor.grid_import", "150.0")
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._is_grid_sensor_unavailable() is False
 
 
 # ---------------------------------------------------------------------------
-# Test 12: _is_grid_sensor_unavailable — split mode with empty entity
+# Test 12: _is_grid_sensor_unavailable — no sensors configured → False
 # ---------------------------------------------------------------------------
 
-async def test_is_grid_sensor_unavailable_split_empty_entity(hass: HomeAssistant) -> None:
-    """_unavail returns False (available) when entity_id is empty/None."""
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "split",
-        CONF_GRID_SENSOR_IMPORT: None,
-        CONF_GRID_SENSOR_EXPORT: None,
-        CONF_INVERT_SIGN: False,
-    })
+
+async def test_is_grid_sensor_unavailable_no_sensors(hass: HomeAssistant) -> None:
+    """_is_grid_sensor_unavailable returns False when no import sensors configured."""
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_INVERT_SIGN: False,
+        },
+    )
     coordinator = ZeroGridCoordinator(hass, entry)
-    # Both entities are None/empty → _unavail returns False → not unavailable
     assert coordinator._is_grid_sensor_unavailable() is False
 
 
 # ---------------------------------------------------------------------------
 # Test 13: _read_sensor_safe — empty entity_id returns default
 # ---------------------------------------------------------------------------
+
 
 async def test_read_sensor_safe_empty_entity(hass: HomeAssistant) -> None:
     """_read_sensor_safe returns the default value when entity_id is empty."""
@@ -262,6 +279,7 @@ async def test_read_sensor_safe_empty_entity(hass: HomeAssistant) -> None:
 # ---------------------------------------------------------------------------
 # Test 14: _read_sensor_safe — non-numeric state returns default
 # ---------------------------------------------------------------------------
+
 
 async def test_read_sensor_safe_value_error(hass: HomeAssistant) -> None:
     """_read_sensor_safe returns default when state.state is not a number."""
@@ -275,39 +293,22 @@ async def test_read_sensor_safe_value_error(hass: HomeAssistant) -> None:
 # Test 15: reload_config — preserves setpoints
 # ---------------------------------------------------------------------------
 
+
 async def test_reload_config_preserves_setpoints(hass: HomeAssistant) -> None:
     """reload_config preserves previously applied setpoints."""
-    entry = _make_entry(hass, subentries_data=[
-        {
-            "subentry_type": ARRAY_SUBENTRY_TYPE,
-            "title": "Roof South",
-            "data": {
-                CONF_ARRAY_NAME: "Roof South",
-                CONF_SETPOINT_ENTITY: "number.inverter_limit",
-                CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-                "settling_time_s": 15,
-                "setpoint_min": 0.0,
-                "setpoint_max": 100.0,
-                "priority": 1,
-                "w_per_unit": 10.0,
-                "calibration_confidence": "estimated",
-                "enabled": True,
-            },
-            "unique_id": None,
-        }
-    ])
+    entry = _make_entry(hass, subentries_data=[_array_subentry_data()])
     coordinator = ZeroGridCoordinator(hass, entry)
     coordinator._current_setpoints["Roof South"] = 65.0
 
     coordinator.reload_config()
 
-    # Setpoint should be preserved
     assert coordinator._current_setpoints.get("Roof South") == 65.0
 
 
 # ---------------------------------------------------------------------------
 # Test 16: set_ewm_alpha updates the filter coefficient
 # ---------------------------------------------------------------------------
+
 
 async def test_set_ewm_alpha(hass: HomeAssistant) -> None:
     """set_ewm_alpha updates _ewm_alpha on the coordinator."""
@@ -321,6 +322,7 @@ async def test_set_ewm_alpha(hass: HomeAssistant) -> None:
 # Test 17: set_deadband updates the deadband threshold
 # ---------------------------------------------------------------------------
 
+
 async def test_set_deadband(hass: HomeAssistant) -> None:
     """set_deadband updates _deadband_w on the coordinator."""
     entry = _make_entry(hass)
@@ -333,101 +335,60 @@ async def test_set_deadband(hass: HomeAssistant) -> None:
 # Test 18: Property accessors
 # ---------------------------------------------------------------------------
 
+
 async def test_property_accessors(hass: HomeAssistant) -> None:
     """Test coordinator property accessors."""
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: True,
-    })
-    coordinator = ZeroGridCoordinator(hass, entry)
-
-    assert coordinator.grid_entity == "sensor.grid_power"
-    assert coordinator.invert_sign is True
-    assert coordinator.measurement_type == "net"
-    assert coordinator.expert_mode is False
-    assert coordinator.get_estimator("nonexistent") is None
-
-
-# ---------------------------------------------------------------------------
-# Test 19: get_array returns None for non-existent array
-# ---------------------------------------------------------------------------
-
-async def test_get_array_none(hass: HomeAssistant) -> None:
-    """get_array returns None when the array is not found."""
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
+
+    assert coordinator.expert_mode is False
+    assert coordinator.get_estimator("nonexistent") is None
     assert coordinator.get_array("nonexistent") is None
+    assert coordinator.controller_enabled is True
+
+
+# ---------------------------------------------------------------------------
+# Test 19: read_grid_w — returns None when sensor unavailable
+# ---------------------------------------------------------------------------
+
+
+async def test_read_grid_w_unavailable(hass: HomeAssistant) -> None:
+    """read_grid_w returns None when import sensor is unavailable."""
+    entry = _make_entry(hass)
+    hass.states.async_set("sensor.grid_import", "unavailable")
+    coordinator = ZeroGridCoordinator(hass, entry)
+    assert coordinator.read_grid_w() is None
 
 
 # ---------------------------------------------------------------------------
 # Test 20: Estimator state restored from saved options
 # ---------------------------------------------------------------------------
 
+
 async def test_estimator_state_restored(hass: HomeAssistant) -> None:
     """Coordinator restores estimator state from CONF_ESTIMATOR_STATE in options."""
     from custom_components.zero_grid_controller.const import CONF_ESTIMATOR_STATE
     from custom_components.zero_grid_controller.estimator import RLSEstimator
 
-    # Build a saved estimator state
     est = RLSEstimator(settling_time_s=15)
     for _ in range(10):
         est.update(-50.0, 50.0)
     saved_state = est.to_dict()
 
-    entry = _make_entry(hass,
-        subentries_data=[
-            {
-                "subentry_type": ARRAY_SUBENTRY_TYPE,
-                "title": "Roof South",
-                "data": {
-                    CONF_ARRAY_NAME: "Roof South",
-                    CONF_SETPOINT_ENTITY: "number.inverter_limit",
-                    CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-                    "settling_time_s": 15,
-                    "setpoint_min": 0.0,
-                    "setpoint_max": 100.0,
-                    "priority": 1,
-                    "w_per_unit": 10.0,
-                    "calibration_confidence": "estimated",
-                    "enabled": True,
-                },
-                "unique_id": None,
-            }
-        ],
-    )
-    # Add estimator state to entry options
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
-    entry2 = MockConfigEntry(
-        domain=entry.domain,
-        unique_id=entry.unique_id + "_est",
-        data=dict(entry.data),
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN + "_est",
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_INVERT_SIGN: False,
+        },
         options={CONF_ESTIMATOR_STATE: {"Roof South": saved_state}},
-        subentries_data=[
-            {
-                "subentry_type": ARRAY_SUBENTRY_TYPE,
-                "title": "Roof South",
-                "data": {
-                    CONF_ARRAY_NAME: "Roof South",
-                    CONF_SETPOINT_ENTITY: "number.inverter_limit",
-                    CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-                    "settling_time_s": 15,
-                    "setpoint_min": 0.0,
-                    "setpoint_max": 100.0,
-                    "priority": 1,
-                    "w_per_unit": 10.0,
-                    "calibration_confidence": "estimated",
-                    "enabled": True,
-                },
-                "unique_id": None,
-            }
-        ],
+        subentries_data=[_array_subentry_data()],
     )
-    entry2.add_to_hass(hass)
-    coordinator = ZeroGridCoordinator(hass, entry2)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
 
-    # Estimator should be restored with the saved n_updates
     restored = coordinator.get_estimator("Roof South")
     assert restored is not None
     assert restored.n_updates == 10

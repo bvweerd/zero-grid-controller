@@ -268,7 +268,6 @@ class ZGCArrayNumberBase(ZGCNumberBase):
     ) -> None:
         super().__init__(coordinator, entry, device, f"{array_name}_{key}", default)
         self._array_name = array_name
-        self._param_key = key
         self._attr_translation_key = key
 
 

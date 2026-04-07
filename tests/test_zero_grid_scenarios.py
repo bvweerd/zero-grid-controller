@@ -13,6 +13,7 @@ System context (from live battery_controller diagnostics, 2026-04-05 20:00 local
 Grid convention throughout: positive = importing, negative = exporting.
 PID setpoint = 0 W.  delta_w > 0 means "curtail PV"; < 0 means "open PV".
 """
+
 from __future__ import annotations
 
 import time
@@ -23,22 +24,14 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.zero_grid_controller.array import ArrayConfig
-import pytest
-
 from custom_components.zero_grid_controller.const import (
-    ARRAY_SUBENTRY_TYPE,
-    CONF_ARRAY_NAME,
-    CONF_BATTERY_MAX_CHARGE_W,
-    CONF_BATTERY_SENSOR,
     CONF_DEADBAND_W,
-    CONF_GRID_MEASUREMENT_TYPE,
-    CONF_GRID_SENSOR,
+    CONF_GRID_IMPORT_SENSORS,
     CONF_INVERT_SIGN,
     CONF_MODE_GUARD_ENABLED,
     CONF_MODE_GUARD_ENTITY,
     CONF_MODE_GUARD_MAPPING,
-    CONF_OUTPUT_TYPE,
-    CONF_SETPOINT_ENTITY,
+    DEFAULT_RESPONSE_FACTOR,
     DOMAIN,
     OUTPUT_TYPE_PERCENT,
 )
@@ -55,20 +48,58 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_entry(hass: HomeAssistant, data: dict | None = None, options: dict | None = None) -> MockConfigEntry:
+
+def _make_entry(
+    hass: HomeAssistant,
+    data: dict | None = None,
+    options: dict | None = None,
+    subentries_data=None,
+) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
-        data=data or {
+        data=data
+        or {
             "name": "Test ZGC",
-            CONF_GRID_MEASUREMENT_TYPE: "net",
-            CONF_GRID_SENSOR: "sensor.grid_power",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_power"],
             CONF_INVERT_SIGN: False,
         },
         options=options or {},
+        subentries_data=subentries_data or (),
     )
     entry.add_to_hass(hass)
     return entry
+
+
+def _battery_subentry(
+    sensor: str,
+    max_charge_w: float = 5000.0,
+    max_discharge_w: float | None = None,
+    control_enabled: bool = False,
+    setpoint_entity: str | None = None,
+    name: str = "Battery",
+) -> dict:
+    """Build a battery subentry_data dict."""
+    from custom_components.zero_grid_controller.const import BATTERY_SUBENTRY_TYPE
+
+    data: dict = {
+        "name": name,
+        "battery_sensor": sensor,
+        "battery_max_charge_w": max_charge_w,
+        "battery_max_discharge_w": max_discharge_w
+        if max_discharge_w is not None
+        else max_charge_w,
+        "battery_control_enabled": control_enabled,
+        "response_factor": 1.0,
+    }
+    if setpoint_entity:
+        data["battery_setpoint_entity"] = setpoint_entity
+    return {
+        "subentry_type": BATTERY_SUBENTRY_TYPE,
+        "title": name,
+        "data": data,
+        "unique_id": None,
+    }
 
 
 def _pv_west(setpoint: float = 80.0, *, pv_sensor: bool = False) -> ArrayConfig:
@@ -84,7 +115,6 @@ def _pv_west(setpoint: float = 80.0, *, pv_sensor: bool = False) -> ArrayConfig:
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
-        priority=1,
     )
 
 
@@ -101,7 +131,6 @@ def _pv_zuidarray(setpoint: float = 80.0) -> ArrayConfig:
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
-        priority=2,
     )
 
 
@@ -123,8 +152,10 @@ def _inject(
 
 async def _run_loop(coordinator: ZeroGridCoordinator, dt: float = 5.0):
     """Run one control-loop cycle with _write_setpoint mocked out."""
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()), \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()),
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         return await coordinator._run_control_loop(dt, time.monotonic())
 
 
@@ -136,12 +167,15 @@ async def _run_loop(coordinator: ZeroGridCoordinator, dt: float = 5.0):
 # Expected: both arrays' setpoints DECREASE (curtail).
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_heavy_export_curtails_setpoints(hass: HomeAssistant) -> None:
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 20.0})
     hass.states.async_set("sensor.grid_power", "-2700.0")
 
     coordinator = ZeroGridCoordinator(hass, entry)
-    _inject(coordinator, [_pv_west(), _pv_zuidarray()], {"PV West": 80.0, "PV Zuid": 80.0})
+    _inject(
+        coordinator, [_pv_west(), _pv_zuidarray()], {"PV West": 80.0, "PV Zuid": 80.0}
+    )
 
     await _run_loop(coordinator)
 
@@ -158,6 +192,7 @@ async def test_scenario_heavy_export_curtails_setpoints(hass: HomeAssistant) -> 
 # Expected: setpoints INCREASE (open up to produce more).
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_import_opens_setpoints(hass: HomeAssistant) -> None:
     # Morning scenario: house drawing 500 W, PV not yet producing, arrays at 50 %.
     # The controller should open the limits to allow more production.
@@ -167,8 +202,10 @@ async def test_scenario_import_opens_setpoints(hass: HomeAssistant) -> None:
     hass.states.async_set("sensor.grid_power", "500.0")
 
     coordinator = ZeroGridCoordinator(hass, entry)
-    _inject(coordinator, [_pv_west(), _pv_zuidarray()], {"PV West": 50.0, "PV Zuid": 50.0})
-    coordinator._filtered_w = 500.0   # pre-warm EWM filter
+    _inject(
+        coordinator, [_pv_west(), _pv_zuidarray()], {"PV West": 50.0, "PV Zuid": 50.0}
+    )
+    coordinator._filtered_w = 500.0  # pre-warm EWM filter
 
     await _run_loop(coordinator)
 
@@ -184,6 +221,7 @@ async def test_scenario_import_opens_setpoints(hass: HomeAssistant) -> None:
 # Grid = +10 W is within deadband → integrator frozen, no writes.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_within_deadband_no_writes(hass: HomeAssistant) -> None:
     entry = _make_entry(hass)
     hass.states.async_set("sensor.grid_power", "10.0")
@@ -191,12 +229,15 @@ async def test_scenario_within_deadband_no_writes(hass: HomeAssistant) -> None:
     coordinator = ZeroGridCoordinator(hass, entry)
     _inject(coordinator, [_pv_west()], {"PV West": 80.0})
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         result = await coordinator._run_control_loop(5.0, time.monotonic())
 
     mock_write.assert_not_called()
     from custom_components.zero_grid_controller.const import STATUS_DEADBAND
+
     assert result.mode == STATUS_DEADBAND
 
 
@@ -207,24 +248,32 @@ async def test_scenario_within_deadband_no_writes(hass: HomeAssistant) -> None:
 # which maps to MODE_PASSIVE.  In passive mode delta_w < 0 (open) is blocked.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_passive_mode_blocks_opening(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_MODE_GUARD_ENABLED: True,
-        CONF_MODE_GUARD_ENTITY: "input_select.energy_mode",
-        CONF_MODE_GUARD_MAPPING: {"self_consumption": "passive", "export": "active"},
-    })
-    hass.states.async_set("sensor.grid_power", "300.0")          # importing
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_power"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.energy_mode",
+            CONF_MODE_GUARD_MAPPING: {
+                "self_consumption": "passive",
+                "export": "active",
+            },
+        },
+    )
+    hass.states.async_set("sensor.grid_power", "300.0")  # importing
     hass.states.async_set("input_select.energy_mode", "self_consumption")
 
     coordinator = ZeroGridCoordinator(hass, entry)
     _inject(coordinator, [_pv_west()], {"PV West": 80.0})
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         await coordinator._run_control_loop(5.0, time.monotonic())
 
     # Passive mode must block opening → no setpoint written
@@ -238,24 +287,29 @@ async def test_scenario_passive_mode_blocks_opening(hass: HomeAssistant) -> None
 # delta_w > 0 (curtail) is permitted even in passive mode.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_passive_mode_allows_curtailing(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_MODE_GUARD_ENABLED: True,
-        CONF_MODE_GUARD_ENTITY: "input_select.energy_mode",
-        CONF_MODE_GUARD_MAPPING: {"self_consumption": "passive"},
-    })
-    hass.states.async_set("sensor.grid_power", "-500.0")         # exporting
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_power"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.energy_mode",
+            CONF_MODE_GUARD_MAPPING: {"self_consumption": "passive"},
+        },
+    )
+    hass.states.async_set("sensor.grid_power", "-500.0")  # exporting
     hass.states.async_set("input_select.energy_mode", "self_consumption")
 
     coordinator = ZeroGridCoordinator(hass, entry)
     _inject(coordinator, [_pv_west()], {"PV West": 80.0})
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         await coordinator._run_control_loop(5.0, time.monotonic())
 
     # Setpoint must have been written (curtailment allowed in passive)
@@ -272,15 +326,14 @@ async def test_scenario_passive_mode_allows_curtailing(hass: HomeAssistant) -> N
 # in the ZGCResult.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_battery_clipping_detected(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_BATTERY_SENSOR: "sensor.marstek_power",
-        CONF_BATTERY_MAX_CHARGE_W: 1210.0,
-    })
+    entry = _make_entry(
+        hass,
+        subentries_data=[
+            _battery_subentry("sensor.marstek_power", max_charge_w=1210.0)
+        ],
+    )
     hass.states.async_set("sensor.grid_power", "-800.0")
     hass.states.async_set("sensor.marstek_power", "1200.0")  # 1200 ≥ 1210 × 0.95
 
@@ -299,6 +352,7 @@ async def test_scenario_battery_clipping_detected(hass: HomeAssistant) -> None:
 # The coordinator must skip it even though delta_w is large.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_settling_time_blocks_writes(hass: HomeAssistant) -> None:
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
     hass.states.async_set("sensor.grid_power", "-2700.0")
@@ -310,8 +364,10 @@ async def test_scenario_settling_time_blocks_writes(hass: HomeAssistant) -> None
     # Mark the array as still settling
     coordinator._settling_until["PV West"] = time.monotonic() + 30.0
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         await coordinator._run_control_loop(5.0, time.monotonic())
 
     mock_write.assert_not_called()
@@ -325,6 +381,7 @@ async def test_scenario_settling_time_blocks_writes(hass: HomeAssistant) -> None
 # Grid = −1200 W → curtail; each array's share ∝ its headroom.
 # Expected: PV West setpoint drops more than PV Zuid (more headroom).
 # ---------------------------------------------------------------------------
+
 
 async def test_scenario_proportional_distribution(hass: HomeAssistant) -> None:
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
@@ -359,6 +416,7 @@ async def test_scenario_proportional_distribution(hass: HomeAssistant) -> None:
 # Even with a large grid error the coordinator must not touch PV West.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_override_prevents_writes(hass: HomeAssistant) -> None:
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
     hass.states.async_set("sensor.grid_power", "-2700.0")
@@ -388,8 +446,8 @@ async def test_scenario_override_prevents_writes(hass: HomeAssistant) -> None:
 # the default.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_rls_learning_auto_tunes_kp(hass: HomeAssistant) -> None:
-    from custom_components.zero_grid_controller.const import DEFAULT_KP
 
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -405,7 +463,7 @@ async def test_scenario_rls_learning_auto_tunes_kp(hass: HomeAssistant) -> None:
     assert estimator.is_reliable
 
     # Simulate one more coordinator update that triggers Kp tuning
-    new_kp = estimator.suggest_kp(coordinator.pid.kp, coordinator._response_factor)
+    new_kp = estimator.suggest_kp(coordinator.pid.kp, DEFAULT_RESPONSE_FACTOR)
     coordinator.pid.set_gains(new_kp, coordinator.pid.ki, coordinator.pid.kd)
 
     # Kp should have moved away from the un-tuned default
@@ -422,20 +480,26 @@ async def test_scenario_rls_learning_auto_tunes_kp(hass: HomeAssistant) -> None:
 # integrator, and return STATUS_CLOUD_SHADOW without writing a setpoint.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_cloud_shadow_freezes_integrator(hass: HomeAssistant) -> None:
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
     hass.states.async_set("sensor.grid_power", "-500.0")
-    hass.states.async_set("sensor.pv_west_power", "50.0")  # far below 80 % × 23 = 1840 W
+    hass.states.async_set(
+        "sensor.pv_west_power", "50.0"
+    )  # far below 80 % × 23 = 1840 W
 
     coordinator = ZeroGridCoordinator(hass, entry)
     array = _pv_west(pv_sensor=True)
     _inject(coordinator, [array], {"PV West": 80.0})
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         result = await coordinator._run_control_loop(5.0, time.monotonic())
 
     from custom_components.zero_grid_controller.const import STATUS_CLOUD_SHADOW
+
     assert result.mode == STATUS_CLOUD_SHADOW
     mock_write.assert_not_called()
 
@@ -449,16 +513,23 @@ async def test_scenario_cloud_shadow_freezes_integrator(hass: HomeAssistant) -> 
 # computed grid = +715 W (importing).
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_computed_grid_mode(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "computed",
-        "power_consumption_sensors": ["sensor.power_consumption"],
-        "power_production_sensors": ["sensor.power_production"],
-        CONF_INVERT_SIGN: False,
-    })
-    hass.states.async_set("sensor.power_consumption", "715.0")
-    hass.states.async_set("sensor.power_production", "0.0")
+    """Multiple import sensors are summed, export sensors are subtracted."""
+    from custom_components.zero_grid_controller.const import CONF_GRID_EXPORT_SENSORS
+
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.import_a", "sensor.import_b"],
+            CONF_GRID_EXPORT_SENSORS: ["sensor.export"],
+            CONF_INVERT_SIGN: False,
+        },
+    )
+    hass.states.async_set("sensor.import_a", "500.0")
+    hass.states.async_set("sensor.import_b", "215.0")
+    hass.states.async_set("sensor.export", "0.0")
 
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._read_grid() == pytest.approx(715.0)
@@ -471,16 +542,19 @@ async def test_scenario_computed_grid_mode(hass: HomeAssistant) -> None:
 # the controller must reset the PID and return STATUS_DISABLED.
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_mode_disabled(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_MODE_GUARD_ENABLED: True,
-        CONF_MODE_GUARD_ENTITY: "input_select.energy_mode",
-        CONF_MODE_GUARD_MAPPING: {"off": "disabled"},
-    })
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_power"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.energy_mode",
+            CONF_MODE_GUARD_MAPPING: {"off": "disabled"},
+        },
+    )
     hass.states.async_set("sensor.grid_power", "-500.0")
     hass.states.async_set("input_select.energy_mode", "off")
 
@@ -489,9 +563,13 @@ async def test_scenario_mode_disabled(hass: HomeAssistant) -> None:
 
     from custom_components.zero_grid_controller.const import STATUS_DISABLED
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
-        result = await coordinator._run_control_loop(5.0, __import__("time").monotonic())
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
+        result = await coordinator._run_control_loop(
+            5.0, __import__("time").monotonic()
+        )
 
     assert result.mode == STATUS_DISABLED
     mock_write.assert_not_called()
@@ -503,6 +581,7 @@ async def test_scenario_mode_disabled(hass: HomeAssistant) -> None:
 # When the PV sensor reports power close to the setpoint limit, the controller
 # detects clipping (pv_clipping_any = True) and proceeds with normal control.
 # ---------------------------------------------------------------------------
+
 
 async def test_scenario_pv_clipping_active(hass: HomeAssistant) -> None:
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
@@ -527,22 +606,20 @@ async def test_scenario_pv_clipping_active(hass: HomeAssistant) -> None:
 # the coordinator must call hass.services.async_call for the number.set_value.
 # ---------------------------------------------------------------------------
 
-async def test_scenario_battery_setpoint_write(hass: HomeAssistant) -> None:
-    from custom_components.zero_grid_controller.const import (
-        CONF_BATTERY_CONTROL_ENABLED,
-        CONF_BATTERY_MAX_CHARGE_W,
-        CONF_BATTERY_SETPOINT_ENTITY,
-    )
 
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_BATTERY_CONTROL_ENABLED: True,
-        CONF_BATTERY_SETPOINT_ENTITY: "number.battery_target",
-        CONF_BATTERY_MAX_CHARGE_W: 5000.0,
-    }, options={CONF_DEADBAND_W: 0.0})
+async def test_scenario_battery_setpoint_write(hass: HomeAssistant) -> None:
+    entry = _make_entry(
+        hass,
+        options={CONF_DEADBAND_W: 0.0},
+        subentries_data=[
+            _battery_subentry(
+                "sensor.battery_power",
+                max_charge_w=5000.0,
+                control_enabled=True,
+                setpoint_entity="number.battery_target",
+            )
+        ],
+    )
     hass.states.async_set("sensor.grid_power", "300.0")
 
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -567,21 +644,17 @@ async def test_scenario_battery_setpoint_write(hass: HomeAssistant) -> None:
 # Scenario 16: STATUS_SATURATION — battery clipping, PV sensor present but not clipping
 # ---------------------------------------------------------------------------
 
-async def test_scenario_status_saturation(hass: HomeAssistant) -> None:
-    from custom_components.zero_grid_controller.const import (
-        CONF_BATTERY_MAX_CHARGE_W,
-        CONF_BATTERY_SENSOR,
-        STATUS_SATURATION,
-    )
 
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_BATTERY_SENSOR: "sensor.battery_power",
-        CONF_BATTERY_MAX_CHARGE_W: 1000.0,
-    }, options={CONF_DEADBAND_W: 0.0})
+async def test_scenario_status_saturation(hass: HomeAssistant) -> None:
+    from custom_components.zero_grid_controller.const import STATUS_SATURATION
+
+    entry = _make_entry(
+        hass,
+        options={CONF_DEADBAND_W: 0.0},
+        subentries_data=[
+            _battery_subentry("sensor.battery_power", max_charge_w=1000.0)
+        ],
+    )
     hass.states.async_set("sensor.grid_power", "-500.0")
     # Battery at max charge (clipping)
     hass.states.async_set("sensor.battery_power", "980.0")  # >= 1000 * 0.95
@@ -602,6 +675,7 @@ async def test_scenario_status_saturation(hass: HomeAssistant) -> None:
 # Scenario 17: Grid unavailable → available transition dismisses repair issue
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_grid_unavailable_dismiss_issue(hass: HomeAssistant) -> None:
     entry = _make_entry(hass)
     hass.states.async_set("sensor.grid_power", "150.0")
@@ -616,10 +690,13 @@ async def test_scenario_grid_unavailable_dismiss_issue(hass: HomeAssistant) -> N
     def _mock_dismiss(hass_arg):
         dismissed.append(True)
 
-    with patch(
-        "custom_components.zero_grid_controller.coordinator.dismiss_grid_sensor_unavailable",
-        side_effect=_mock_dismiss,
-    ), patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch(
+            "custom_components.zero_grid_controller.coordinator.dismiss_grid_sensor_unavailable",
+            side_effect=_mock_dismiss,
+        ),
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         await coordinator._run_control_loop(5.0, __import__("time").monotonic())
 
     assert dismissed, "dismiss_grid_sensor_unavailable should have been called"
@@ -630,37 +707,46 @@ async def test_scenario_grid_unavailable_dismiss_issue(hass: HomeAssistant) -> N
 # Scenario 18: _async_update_data exception → raises UpdateFailed
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_update_data_exception(hass: HomeAssistant) -> None:
     from homeassistant.helpers.update_coordinator import UpdateFailed
 
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
 
-    with patch.object(
-        coordinator, "_run_control_loop", side_effect=RuntimeError("simulated error")
+    with (
+        patch.object(
+            coordinator,
+            "_run_control_loop",
+            side_effect=RuntimeError("simulated error"),
+        ),
+        pytest.raises(UpdateFailed),
     ):
-        with pytest.raises(UpdateFailed):
-            await coordinator._async_update_data()
+        await coordinator._async_update_data()
 
 
 # ---------------------------------------------------------------------------
 # Scenario 19: _resolve_mode — unknown state falls back to MODE_ACTIVE
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_resolve_mode_unknown_state(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_MODE_GUARD_ENABLED: True,
-        CONF_MODE_GUARD_ENTITY: "input_select.mode",
-        CONF_MODE_GUARD_MAPPING: {"active": "active"},
-    })
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_power"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.mode",
+            CONF_MODE_GUARD_MAPPING: {"active": "active"},
+        },
+    )
     hass.states.async_set("input_select.mode", "unknown")
 
     coordinator = ZeroGridCoordinator(hass, entry)
     from custom_components.zero_grid_controller.const import MODE_ACTIVE
+
     assert coordinator._resolve_mode() == MODE_ACTIVE
 
 
@@ -668,26 +754,31 @@ async def test_scenario_resolve_mode_unknown_state(hass: HomeAssistant) -> None:
 # Scenario 20: _resolve_mode — invalid mapped value falls back to MODE_ACTIVE
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_resolve_mode_invalid_mapped(hass: HomeAssistant) -> None:
-    entry = _make_entry(hass, data={
-        "name": "Test ZGC",
-        CONF_GRID_MEASUREMENT_TYPE: "net",
-        CONF_GRID_SENSOR: "sensor.grid_power",
-        CONF_INVERT_SIGN: False,
-        CONF_MODE_GUARD_ENABLED: True,
-        CONF_MODE_GUARD_ENTITY: "input_select.mode",
-        CONF_MODE_GUARD_MAPPING: {"export": "invalid_mode"},
-    })
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_power"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.mode",
+            CONF_MODE_GUARD_MAPPING: {"export": "invalid_mode"},
+        },
+    )
     hass.states.async_set("input_select.mode", "export")
 
     coordinator = ZeroGridCoordinator(hass, entry)
     from custom_components.zero_grid_controller.const import MODE_ACTIVE
+
     assert coordinator._resolve_mode() == MODE_ACTIVE
 
 
 # ---------------------------------------------------------------------------
 # Scenario 21: Expired override is cleaned up during distribute_and_write
 # ---------------------------------------------------------------------------
+
 
 async def test_scenario_expired_override_cleanup(hass: HomeAssistant) -> None:
     import time as _time
@@ -711,6 +802,7 @@ async def test_scenario_expired_override_cleanup(hass: HomeAssistant) -> None:
 # ---------------------------------------------------------------------------
 # Scenario 22: RLS estimator update when reliable → auto-tunes Kp
 # ---------------------------------------------------------------------------
+
 
 async def test_scenario_rls_auto_tune_in_update_estimators(hass: HomeAssistant) -> None:
     import time as _time
@@ -742,6 +834,7 @@ async def test_scenario_rls_auto_tune_in_update_estimators(hass: HomeAssistant) 
 # Scenario 23: _persist_estimators stores state in entry options
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_persist_estimators(hass: HomeAssistant) -> None:
     from custom_components.zero_grid_controller.const import CONF_ESTIMATOR_STATE
 
@@ -759,9 +852,10 @@ async def test_scenario_persist_estimators(hass: HomeAssistant) -> None:
 # Scenario 24: _write_setpoint with switch output type
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_write_setpoint_switch(hass: HomeAssistant) -> None:
-    from custom_components.zero_grid_controller.const import OUTPUT_TYPE_SWITCH
     from custom_components.zero_grid_controller.array import ArrayConfig
+    from custom_components.zero_grid_controller.const import OUTPUT_TYPE_SWITCH
 
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -777,7 +871,6 @@ async def test_scenario_write_setpoint_switch(hass: HomeAssistant) -> None:
         setpoint_min=0.0,
         setpoint_max=1.0,
         settling_time_s=5,
-        priority=1,
     )
 
     switch_calls = []
@@ -800,6 +893,7 @@ async def test_scenario_write_setpoint_switch(hass: HomeAssistant) -> None:
 # Scenario 25: _distribute_and_write — total headroom = 0 → return {}
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_distribute_headroom_zero(hass: HomeAssistant) -> None:
     """_distribute_and_write returns {} when all headroom is exhausted."""
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
@@ -809,8 +903,10 @@ async def test_scenario_distribute_headroom_zero(hass: HomeAssistant) -> None:
     _inject(coordinator, [_pv_west()], {"PV West": 0.0})  # at setpoint_min = 0
     coordinator._filtered_w = 500.0
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         # delta_w > 0 (curtail) but array is at min → total headroom = 0 → {}
         result = await coordinator._distribute_and_write(100.0, time.monotonic())
 
@@ -822,6 +918,7 @@ async def test_scenario_distribute_headroom_zero(hass: HomeAssistant) -> None:
 # Scenario 26: _distribute_and_write — delta_unit rounds to 0 → continue
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_distribute_delta_unit_zero(hass: HomeAssistant) -> None:
     """_distribute_and_write skips arrays when share_w / w_per_unit rounds to 0."""
     entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
@@ -831,8 +928,10 @@ async def test_scenario_distribute_delta_unit_zero(hass: HomeAssistant) -> None:
     _inject(coordinator, [_pv_west()], {"PV West": 50.0})
     coordinator._filtered_w = 500.0
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
         result = await coordinator._distribute_and_write(1.0, time.monotonic())
 
     assert result == {}
@@ -843,6 +942,7 @@ async def test_scenario_distribute_delta_unit_zero(hass: HomeAssistant) -> None:
 # Scenario 27: _distribute_and_write — actual_delta = 0 after clamp → continue
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_distribute_actual_delta_zero(hass: HomeAssistant) -> None:
     """_distribute_and_write skips write when clamp produces zero delta."""
     import custom_components.zero_grid_controller.coordinator as coord_module
@@ -852,15 +952,15 @@ async def test_scenario_distribute_actual_delta_zero(hass: HomeAssistant) -> Non
     _inject(coordinator, [_pv_west()], {"PV West": 50.0})
     coordinator._filtered_w = 500.0
 
-    original_clamp = coord_module._clamp
-
     def _clamp_returns_current(value, lo, hi):
         # Return current setpoint (50.0) to force actual_delta = 0
         return 50.0
 
-    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write, \
-         patch.object(coordinator, "_persist_estimators"), \
-         patch.object(coord_module, "_clamp", side_effect=_clamp_returns_current):
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+        patch.object(coord_module, "_clamp", side_effect=_clamp_returns_current),
+    ):
         result = await coordinator._distribute_and_write(200.0, time.monotonic())
 
     assert result == {}
@@ -870,6 +970,7 @@ async def test_scenario_distribute_actual_delta_zero(hass: HomeAssistant) -> Non
 # ---------------------------------------------------------------------------
 # Scenario 28: _write_setpoint with number output type (line 516)
 # ---------------------------------------------------------------------------
+
 
 async def test_scenario_write_setpoint_number(hass: HomeAssistant) -> None:
     """_write_setpoint calls number.set_value service for percent-type arrays."""
@@ -892,6 +993,7 @@ async def test_scenario_write_setpoint_number(hass: HomeAssistant) -> None:
 # Scenario 29: _update_estimators — pending estimate not settled yet (line 544)
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_update_estimators_not_settled(hass: HomeAssistant) -> None:
     """_update_estimators skips estimate when settling period has not elapsed."""
     entry = _make_entry(hass)
@@ -912,11 +1014,12 @@ async def test_scenario_update_estimators_not_settled(hass: HomeAssistant) -> No
 # Scenario 30: _write_battery_target — no entity → early return (line 578)
 # ---------------------------------------------------------------------------
 
+
 async def test_scenario_write_battery_target_no_entity(hass: HomeAssistant) -> None:
-    """_write_battery_target returns early when battery setpoint entity is not set."""
+    """_write_battery_targets returns empty dict when no batteries are configured."""
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
-    assert not coordinator._battery_setpoint_entity
+    assert coordinator.batteries == []
 
-    # Should not raise and should not call any service
-    await coordinator._write_battery_target(500.0)
+    result = await coordinator._write_battery_targets(500.0)
+    assert result == {}

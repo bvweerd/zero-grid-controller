@@ -1,0 +1,265 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Zero Grid Controller — Gridsensoren",
+        "description": "Voeg de sensoren toe die meten hoeveel vermogen van en aan het net wordt geleverd. Voeg PV-arrays en batterijen toe als subentries na de setup.",
+        "data": {
+          "name": "Integratienaam",
+          "grid_import_sensors": "Grid importsensoren (vermogen afgenomen van net)",
+          "grid_export_sensors": "Grid exportsensoren (vermogen geleverd aan net, optioneel)",
+          "invert_sign": "Teken omkeren (als uw importsensor negatieve waarden toont voor import)"
+        }
+      },
+      "mode_guard": {
+        "title": "Optimizer-integratie (optioneel)",
+        "description": "Koppel met een optimizer zoals Battery Controller om besturingsmodi te coördineren. Wanneer ingeschakeld, bepaalt een externe entiteit of Zero Grid Controller actief, passief of uitgeschakeld wordt.",
+        "data": {
+          "mode_guard_enabled": "Gebruik een optimizer modus-entiteit",
+          "mode_guard_entity": "Modus-entiteit"
+        }
+      },
+      "mode_mapping": {
+        "title": "Optimizer-modi koppelen",
+        "description": "Kies voor elke moduswaarde van de geselecteerde entiteit wat Zero Grid Controller moet doen."
+      },
+      "done": {
+        "title": "Configuratie voltooid",
+        "description": "Zero Grid Controller is klaar. Voeg PV-arrays en batterijen toe als subentries. De controller begint automatisch met het leren van je systeem."
+      }
+    },
+    "error": {
+      "required": "Dit veld is verplicht."
+    },
+    "abort": {
+      "already_configured": "Zero Grid Controller is al geconfigureerd."
+    }
+  },
+  "config_subentries": {
+    "array": {
+      "initiate_flow": {
+        "user": "PV-array toevoegen"
+      },
+      "entry_type": "PV-array",
+      "step": {
+        "user": {
+          "title": "PV-array toevoegen",
+          "description": "Configureer de PV-omvormeruitgang die de controller moet beheren.",
+          "data": {
+            "array_name": "Array-naam (bijv. Dak Zuid)",
+            "setpoint_entity": "Entiteit die de vermogenslimiet instelt",
+            "output_type": "Uitvoertype",
+            "pv_power_entity": "PV-vermogensensor (optioneel, verbetert wolkendetectie)",
+            "inverter_speed": "Hoe snel reageert deze omvormer?",
+            "response_speed": "Besturingsresponssnelheid",
+            "setpoint_min": "Minimale setpoint-waarde",
+            "setpoint_max": "Maximale setpoint-waarde"
+          }
+        },
+        "reconfigure": {
+          "title": "PV-array configureren",
+          "description": "Pas de instellingen van deze PV-array aan.",
+          "data": {
+            "array_name": "Array-naam",
+            "setpoint_entity": "Entiteit die de vermogenslimiet instelt",
+            "output_type": "Uitvoertype",
+            "pv_power_entity": "PV-vermogensensor (optioneel)",
+            "inverter_speed": "Hoe snel reageert deze omvormer?",
+            "response_speed": "Besturingsresponssnelheid",
+            "setpoint_min": "Minimale setpoint-waarde",
+            "setpoint_max": "Maximale setpoint-waarde",
+            "_recalibrate": "Step-response kalibratie opnieuw uitvoeren na opslaan"
+          }
+        }
+      }
+    },
+    "battery": {
+      "initiate_flow": {
+        "user": "Batterij toevoegen"
+      },
+      "entry_type": "Batterij",
+      "step": {
+        "user": {
+          "title": "Batterij toevoegen",
+          "description": "Configureer een batterijopslagsysteem voor de controller om te bewaken en optioneel aan te sturen.",
+          "data": {
+            "name": "Batterijnaam (bijv. Thuisbatterij)",
+            "battery_sensor": "Batterijvermogensensor (positief = laden)",
+            "battery_max_charge_w": "Maximaal laadvermogen (W)",
+            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
+            "battery_control_enabled": "Laat Zero Grid Controller het batterijsetpoint aansturen",
+            "battery_setpoint_entity": "Batterij setpoint entiteit",
+            "response_speed": "Besturingsresponssnelheid"
+          }
+        },
+        "reconfigure": {
+          "title": "Batterij configureren",
+          "description": "Pas de instellingen van deze batterij aan.",
+          "data": {
+            "name": "Batterijnaam",
+            "battery_sensor": "Batterijvermogensensor (positief = laden)",
+            "battery_max_charge_w": "Maximaal laadvermogen (W)",
+            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
+            "battery_control_enabled": "Laat Zero Grid Controller het batterijsetpoint aansturen",
+            "battery_setpoint_entity": "Batterij setpoint entiteit",
+            "response_speed": "Besturingsresponssnelheid"
+          }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zero Grid Controller opties",
+        "data": {
+          "expert_mode": "Expertmodus inschakelen"
+        },
+        "description": "Schakel expertmodus in om PID- en estimatorparameters handmatig af te stellen. De online auto-tuner wordt uitgeschakeld wanneer expertmodus actief is."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "grid_raw_w": {
+        "name": "Gridvermogen (onbewerkt)"
+      },
+      "grid_filtered_w": {
+        "name": "Gridvermogen (gefilterd)"
+      },
+      "pid_output_w": {
+        "name": "PID-uitgang"
+      },
+      "pid_p_w": {
+        "name": "PID P-term"
+      },
+      "pid_i_w": {
+        "name": "PID I-term"
+      },
+      "pid_d_w": {
+        "name": "PID D-term"
+      },
+      "mode": {
+        "name": "Controllermodus",
+        "state": {
+          "active": "Actief",
+          "passive": "Passief",
+          "disabled": "Uitgeschakeld",
+          "deadband": "Dodeband",
+          "cloud_shadow": "Wolkschaduw",
+          "saturation": "Verzadiging"
+        }
+      },
+      "battery_clipping": {
+        "name": "Batterijclipping"
+      },
+      "learning_status": {
+        "name": "Leerstatus"
+      },
+      "array_setpoint": {
+        "name": "Setpoint"
+      },
+      "array_clipping": {
+        "name": "PV-clipping"
+      },
+      "array_gain_k": {
+        "name": "Systeemversterking K"
+      },
+      "array_calibration": {
+        "name": "Kalibratievertrouwen"
+      },
+      "battery_setpoint": {
+        "name": "Setpoint"
+      }
+    },
+    "number": {
+      "kp": { "name": "Kp (proportionele versterking)" },
+      "ki": { "name": "Ki (integrale versterking)" },
+      "kd": { "name": "Kd (differentiële versterking)" },
+      "ewm_alpha": { "name": "EWM-filter alpha" },
+      "deadband_w": { "name": "Dodeband (W)" },
+      "output_max_w": { "name": "Maximale uitgang (W)" },
+      "settling_time_s": { "name": "Settlingtijd (s)" },
+      "w_per_unit": { "name": "W per eenheid" }
+    },
+    "switch": {
+      "array_enabled": { "name": "Ingeschakeld" },
+      "controller_enabled": { "name": "Controller ingeschakeld" }
+    },
+    "button": {
+      "reset_pid": { "name": "Reset PID" },
+      "recalibrate": { "name": "Kalibreer alle arrays opnieuw" }
+    }
+  },
+  "selector": {
+    "output_type": {
+      "options": {
+        "percent": "Percentage (0–100%)",
+        "watt": "Watt (absoluut vermogenslimiet)",
+        "switch": "Aan/Uit schakelaar"
+      }
+    },
+    "inverter_speed": {
+      "options": {
+        "slow": "Langzaam — meer dan 20 seconden",
+        "normal": "Normaal — 5 tot 20 seconden",
+        "fast": "Snel — minder dan 5 seconden"
+      }
+    },
+    "mode_guard_action": {
+      "options": {
+        "active": "Volledige controle (actief)",
+        "passive": "Alleen beperken, nooit openen (passief)",
+        "disabled": "Niet ingrijpen (uitgeschakeld)"
+      }
+    },
+    "response_speed": {
+      "options": {
+        "cautious": "Voorzichtig — langzame, stabiele reactie",
+        "normal": "Normaal — gebalanceerd (aanbevolen)",
+        "fast": "Snel — snelle reactie, kan oscilleren"
+      }
+    }
+  },
+  "issues": {
+    "grid_sensor_unavailable": {
+      "title": "Gridsensor niet beschikbaar",
+      "description": "Een of meer grid importsensoren zijn niet beschikbaar. Zero Grid Controller kan niet functioneren zonder een geldige gridmeting. Controleer of de sensoren correct zijn geconfigureerd en of de integraties die ze leveren actief zijn."
+    }
+  },
+  "exceptions": {
+    "coordinator_update_failed": {
+      "message": "Zero Grid Controller update mislukt: {error}"
+    }
+  },
+  "services": {
+    "reset_pid": {
+      "name": "Reset PID",
+      "description": "Reset de PID-integrator en afgeleide geschiedenis."
+    },
+    "recalibrate": {
+      "name": "Opnieuw kalibreren",
+      "description": "Voer automatische step-response kalibratie opnieuw uit voor een of alle arrays.",
+      "fields": {
+        "array_name": {
+          "name": "Array-naam",
+          "description": "Naam van de array om te kalibreren. Laat leeg om alle arrays te kalibreren."
+        }
+      }
+    },
+    "override_setpoint": {
+      "name": "Setpoint overschrijven",
+      "description": "Forceer een setpoint voor een array, waarbij PID maximaal 5 minuten wordt omzeild.",
+      "fields": {
+        "array_name": {
+          "name": "Array-naam",
+          "description": "Naam van de array om te overschrijven."
+        },
+        "value": {
+          "name": "Waarde",
+          "description": "Setpoint-waarde (% of W, passend bij het uitvoertype van de array)."
+        }
+      }
+    }
+  }
+}
