@@ -81,11 +81,23 @@ Add one or more PV inverters you want the controller to manage:
 
 You can add multiple arrays. The controller distributes corrections proportionally to available headroom.
 
+#### Switch outputs
+
+If an array uses **Output type = On/Off switch**, Zero Grid Controller treats it as a binary actuator instead of a continuously variable setpoint.
+
+- **Turn on threshold**: if grid import rises above this value, the switch may turn on.
+- **Turn off threshold**: if grid export rises above this value, the switch may turn off.
+- **Minimum on/off time**: after switching, Zero Grid Controller waits this long before switching the same array again.
+
+This is a hysteresis controller. It avoids rapid toggling around 0 W when the grid measurement is noisy or household load changes quickly.
+
+Switch arrays are still compatible with override, enable/disable and mode guard. Automatic numeric calibration is skipped for switch outputs, because there is no intermediate setpoint to measure.
+
 ### Step 3 — Battery (optional)
 
 If you have a home battery, configure it so the controller can account for it:
 
-- Battery power sensor (positive = charging).
+- Battery power sensor (negative = charging, positive = discharging).
 - Maximum charge and discharge power.
 - Optionally: let Zero Grid Controller also write the battery target setpoint.
 
@@ -178,7 +190,6 @@ The auto-tuner only runs when **Expert mode is off**. If you manually set PID ga
 |---------|-------------|
 | `zero_grid_controller.reset_pid` | Reset the PID integrator |
 | `zero_grid_controller.recalibrate` | Re-run step-response calibration |
-| `zero_grid_controller.set_response_speed` | Set response speed (cautious/normal/fast) |
 | `zero_grid_controller.override_setpoint` | Force a setpoint for up to 5 minutes |
 
 ---

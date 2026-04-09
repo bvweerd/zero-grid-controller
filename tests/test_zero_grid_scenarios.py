@@ -34,6 +34,7 @@ from custom_components.zero_grid_controller.const import (
     DEFAULT_RESPONSE_FACTOR,
     DOMAIN,
     OUTPUT_TYPE_PERCENT,
+    OUTPUT_TYPE_SWITCH,
 )
 from custom_components.zero_grid_controller.coordinator import ZeroGridCoordinator
 from custom_components.zero_grid_controller.estimator import RLSEstimator
@@ -131,6 +132,31 @@ def _pv_zuidarray(setpoint: float = 80.0) -> ArrayConfig:
         setpoint_min=0.0,
         setpoint_max=100.0,
         settling_time_s=15,
+    )
+
+
+def _switch_array(
+    setpoint: float = 0.0,
+    *,
+    on_threshold_w: float = 100.0,
+    off_threshold_w: float = 50.0,
+    debounce_s: int = 30,
+) -> ArrayConfig:
+    """Binary PV array controlled through a switch entity."""
+    return ArrayConfig(
+        name="PV Switch",
+        enabled=True,
+        output_type=OUTPUT_TYPE_SWITCH,
+        setpoint_entity="switch.pv_switch",
+        pv_power_entity=None,
+        w_per_unit=1000.0,
+        calibration_confidence="estimated",
+        setpoint_min=0.0,
+        setpoint_max=1.0,
+        settling_time_s=5,
+        switch_on_threshold_w=on_threshold_w,
+        switch_off_threshold_w=off_threshold_w,
+        switch_debounce_s=debounce_s,
     )
 
 
@@ -238,7 +264,8 @@ async def test_scenario_within_deadband_no_writes(hass: HomeAssistant) -> None:
     mock_write.assert_not_called()
     from custom_components.zero_grid_controller.const import STATUS_DEADBAND
 
-    assert result.mode == STATUS_DEADBAND
+    assert result.mode == "active"
+    assert result.status == STATUS_DEADBAND
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +362,7 @@ async def test_scenario_battery_clipping_detected(hass: HomeAssistant) -> None:
         ],
     )
     hass.states.async_set("sensor.grid_power", "-800.0")
-    hass.states.async_set("sensor.marstek_power", "1200.0")  # 1200 ≥ 1210 × 0.95
+    hass.states.async_set("sensor.marstek_power", "-1200.0")  # charging at the limit
 
     coordinator = ZeroGridCoordinator(hass, entry)
     _inject(coordinator, [_pv_west()], {"PV West": 80.0})
@@ -427,12 +454,13 @@ async def test_scenario_override_prevents_writes(hass: HomeAssistant) -> None:
         [_pv_west(), _pv_zuidarray()],
         {"PV West": 80.0, "PV Zuid": 80.0},
     )
-    coordinator.override_setpoint("PV West", 40.0, duration_s=300.0)
+    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()):
+        await coordinator.async_override_setpoint("PV West", 40.0, duration_s=300.0)
 
     await _run_loop(coordinator)
 
-    # PV West must stay at 80 % (override value 40 % is written externally)
-    assert coordinator._current_setpoints["PV West"] == 80.0
+    # PV West must stay at the overridden value
+    assert coordinator._current_setpoints["PV West"] == 40.0
     # PV Zuid is free and should have been curtailed
     assert coordinator._current_setpoints["PV Zuid"] < 80.0
 
@@ -500,8 +528,33 @@ async def test_scenario_cloud_shadow_freezes_integrator(hass: HomeAssistant) -> 
 
     from custom_components.zero_grid_controller.const import STATUS_CLOUD_SHADOW
 
-    assert result.mode == STATUS_CLOUD_SHADOW
+    assert result.mode == "active"
+    assert result.status == STATUS_CLOUD_SHADOW
     mock_write.assert_not_called()
+
+
+async def test_scenario_low_pv_does_not_trigger_cloud_shadow_on_import(
+    hass: HomeAssistant,
+) -> None:
+    """Low PV without clipping should not be classified as cloud shadow during import."""
+    entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
+    hass.states.async_set("sensor.grid_power", "500.0")
+    hass.states.async_set("sensor.pv_west_power", "50.0")
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    array = _pv_west(pv_sensor=True)
+    _inject(coordinator, [array], {"PV West": 80.0})
+
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
+        result = await coordinator._run_control_loop(5.0, time.monotonic())
+
+    from custom_components.zero_grid_controller.const import STATUS_CLOUD_SHADOW
+
+    assert result.mode != STATUS_CLOUD_SHADOW
+    mock_write.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +625,7 @@ async def test_scenario_mode_disabled(hass: HomeAssistant) -> None:
         )
 
     assert result.mode == STATUS_DISABLED
-    mock_write.assert_not_called()
+    mock_write.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +710,7 @@ async def test_scenario_status_saturation(hass: HomeAssistant) -> None:
     )
     hass.states.async_set("sensor.grid_power", "-500.0")
     # Battery at max charge (clipping)
-    hass.states.async_set("sensor.battery_power", "980.0")  # >= 1000 * 0.95
+    hass.states.async_set("sensor.battery_power", "-980.0")  # charging at the limit
     # PV NOT clipping: 50 W << 80% * 23 W/% * 0.9 = 1656 W
     hass.states.async_set("sensor.pv_west_power", "50.0")
 
@@ -668,7 +721,8 @@ async def test_scenario_status_saturation(hass: HomeAssistant) -> None:
 
     result = await _run_loop(coordinator)
 
-    assert result.mode == STATUS_SATURATION
+    assert result.mode == "active"
+    assert result.status == STATUS_SATURATION
 
 
 # ---------------------------------------------------------------------------
@@ -745,9 +799,9 @@ async def test_scenario_resolve_mode_unknown_state(hass: HomeAssistant) -> None:
     hass.states.async_set("input_select.mode", "unknown")
 
     coordinator = ZeroGridCoordinator(hass, entry)
-    from custom_components.zero_grid_controller.const import MODE_ACTIVE
+    from custom_components.zero_grid_controller.const import MODE_DISABLED
 
-    assert coordinator._resolve_mode() == MODE_ACTIVE
+    assert coordinator._resolve_mode() == MODE_DISABLED
 
 
 # ---------------------------------------------------------------------------
@@ -959,7 +1013,7 @@ async def test_scenario_distribute_actual_delta_zero(hass: HomeAssistant) -> Non
     with (
         patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
         patch.object(coordinator, "_persist_estimators"),
-        patch.object(coord_module, "_clamp", side_effect=_clamp_returns_current),
+        patch.object(coord_module, "clamp", side_effect=_clamp_returns_current),
     ):
         result = await coordinator._distribute_and_write(200.0, time.monotonic())
 
@@ -1016,10 +1070,147 @@ async def test_scenario_update_estimators_not_settled(hass: HomeAssistant) -> No
 
 
 async def test_scenario_write_battery_target_no_entity(hass: HomeAssistant) -> None:
-    """_write_battery_targets returns empty dict when no batteries are configured."""
+    """_apply_battery_targets returns empty dict when no batteries are configured."""
     entry = _make_entry(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator.batteries == []
 
-    result = await coordinator._write_battery_targets(500.0)
+    result = await coordinator._apply_battery_targets({}, time.monotonic())
     assert result == {}
+
+
+async def test_scenario_battery_target_missing_resets_to_zero(
+    hass: HomeAssistant,
+) -> None:
+    """Controlled batteries are driven back to 0 W when no target remains."""
+    entry = _make_entry(
+        hass,
+        subentries_data=[
+            _battery_subentry(
+                "sensor.battery_power",
+                control_enabled=True,
+                setpoint_entity="number.battery_target",
+            )
+        ],
+    )
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._current_battery_setpoints["Battery"] = 350.0
+
+    battery_calls = []
+
+    async def _spy_number(call):
+        battery_calls.append(call)
+
+    hass.services.async_register("number", "set_value", _spy_number)
+
+    result = await coordinator._apply_battery_targets({}, time.monotonic())
+
+    assert result["Battery"] == 0.0
+    assert battery_calls[-1].data["value"] == 0.0
+
+
+async def test_scenario_battery_target_supports_input_number(
+    hass: HomeAssistant,
+) -> None:
+    """Battery targets support input_number helpers as configured in the flow."""
+    entry = _make_entry(
+        hass,
+        subentries_data=[
+            _battery_subentry(
+                "sensor.battery_power",
+                control_enabled=True,
+                setpoint_entity="input_number.battery_target",
+            )
+        ],
+    )
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    helper_calls = []
+
+    async def _spy_input_number(call):
+        helper_calls.append(call)
+
+    hass.services.async_register("input_number", "set_value", _spy_input_number)
+
+    result = await coordinator._apply_battery_targets(
+        {"Battery": 125.0}, time.monotonic()
+    )
+
+    assert result["Battery"] == 125.0
+    assert helper_calls[-1].data["entity_id"] == "input_number.battery_target"
+    assert helper_calls[-1].data["value"] == 125.0
+
+
+async def test_scenario_grid_unavailable_enters_safe_state(hass: HomeAssistant) -> None:
+    """Grid sensor failure should neutralise actuators."""
+    entry = _make_entry(
+        hass,
+        subentries_data=[
+            _battery_subentry(
+                "sensor.battery_power",
+                control_enabled=True,
+                setpoint_entity="number.battery_target",
+            )
+        ],
+    )
+    hass.states.async_set("sensor.grid_power", "unavailable")
+    hass.services.async_register("number", "set_value", AsyncMock())
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _inject(coordinator, [_pv_west()], {"PV West": 25.0})
+
+    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write:
+        await coordinator._run_control_loop(5.0, time.monotonic())
+
+    assert coordinator._current_battery_setpoints["Battery"] == 0.0
+    mock_write.assert_awaited()
+
+
+async def test_scenario_switch_hysteresis_turns_on_on_import(
+    hass: HomeAssistant,
+) -> None:
+    """Switch arrays turn on when import exceeds the configured threshold."""
+    entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
+    hass.states.async_set("sensor.grid_power", "250.0")
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _inject(coordinator, [_switch_array()], {"PV Switch": 0.0})
+    coordinator._filtered_w = 250.0
+
+    await _run_loop(coordinator)
+
+    assert coordinator._current_setpoints["PV Switch"] == 1.0
+    assert coordinator._settling_until["PV Switch"] > time.monotonic()
+
+
+async def test_scenario_switch_hysteresis_turns_off_on_export(
+    hass: HomeAssistant,
+) -> None:
+    """Switch arrays turn off when export exceeds the configured threshold."""
+    entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
+    hass.states.async_set("sensor.grid_power", "-120.0")
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _inject(coordinator, [_switch_array()], {"PV Switch": 1.0})
+    coordinator._filtered_w = -120.0
+
+    await _run_loop(coordinator)
+
+    assert coordinator._current_setpoints["PV Switch"] == 0.0
+
+
+async def test_scenario_switch_hysteresis_debounce_blocks_retoggle(
+    hass: HomeAssistant,
+) -> None:
+    """Switch arrays honor their debounce period before toggling again."""
+    entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
+    hass.states.async_set("sensor.grid_power", "-200.0")
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _inject(coordinator, [_switch_array(debounce_s=60)], {"PV Switch": 1.0})
+    coordinator._filtered_w = -200.0
+    coordinator._settling_until["PV Switch"] = time.monotonic() + 30.0
+
+    await _run_loop(coordinator)
+
+    assert coordinator._current_setpoints["PV Switch"] == 1.0

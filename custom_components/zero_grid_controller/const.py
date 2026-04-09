@@ -36,6 +36,7 @@ CONF_DEADBAND_W = "deadband_w"
 CONF_OUTPUT_MAX_W = "output_max_w"
 CONF_RESPONSE_FACTOR = "response_factor"
 CONF_EXPERT_MODE = "expert_mode"
+CONF_CONTROLLER_ENABLED = "controller_enabled"
 
 # Estimator persistence
 CONF_ESTIMATOR_STATE = "estimator_state"
@@ -73,6 +74,7 @@ DEFAULT_SWITCH_ON_THRESHOLD_W = 100.0
 DEFAULT_SWITCH_OFF_THRESHOLD_W = 50.0
 DEFAULT_SWITCH_DEBOUNCE_S = 30
 DEFAULT_BATTERY_MAX_CHARGE_W = 5000.0
+DEFAULT_BATTERY_SETTLING_TIME_S = 3
 CALIBRATION_CONFIDENCE_ESTIMATED = "estimated"
 
 # Calibration constants
@@ -90,6 +92,28 @@ CALIB_STEP_RATIO = 0.10  # Step size as fraction of usable setpoint range
 CALIB_STEP_MIN = 2  # Minimum step size in setpoint units
 CALIB_STEP_MAX = 20  # Maximum step size in setpoint units
 CALIB_MIN_W_PER_UNIT = 0.5  # Minimum measurable response; below → failed
+BATTERY_WRITE_THRESHOLD_W = (
+    5.0  # Minimum setpoint change before writing to battery entity
+)
+
+# Battery response verification
+BATTERY_VERIFICATION_MIN_W = 50.0  # min |commanded| W to attempt verification
+BATTERY_UNRESPONSIVE_THRESHOLD_W = 100.0  # min |commanded| W to count as unresponsive
+BATTERY_UNRESPONSIVE_CYCLES = 3  # consecutive bad cycles before declaring unresponsive
+BATTERY_RESPONSE_EWM_ALPHA = 0.1  # slow EWM for measured_response_factor learning
+BATTERY_HARD_RESET_RATIO = 0.2  # observed_ratio below this triggers hard reset
+BATTERY_RESPONSE_PERSIST_INTERVAL_S = (
+    60.0  # min seconds between response-factor persists
+)
+BATTERY_RECOVERY_BLEND = 0.5  # weight toward 1.0 on recovery from unresponsive
+
+# Calibration: PV-sensor based
+CALIB_PV_SENSOR_MAX_WAIT_S = 15  # max seconds to wait for a slow PV sensor to update
+CALIB_NO_PV_SENSOR_NOTE = (
+    "No PV power sensor configured — calibration used the grid signal (high noise). "
+    "Add a PV power sensor in the array settings for accurate auto-calibration."
+)
+
 CALIB_SETTLING_MIN_S = 3  # Clamp floor for measured settling time
 CALIB_SETTLING_MAX_S = 60  # Clamp ceiling for measured settling time
 CALIB_DEFAULT_FAIL_SETTLING_S = 30  # Settling time used in failed-calibration result
@@ -102,6 +126,10 @@ CONTROL_INTERVAL_S = 5  # Default coordinator update interval
 # Clipping detection thresholds
 ARRAY_CLIPPING_THRESHOLD = 0.90  # PV power ≥ 90 % of setpoint → clipping active
 BATTERY_CLIPPING_THRESHOLD = 0.95  # Battery power ≥ 95 % of max → clipping active
+CLOUD_SHADOW_PV_RATIO = 0.5  # PV output ≤ 50 % of applied limit suggests low generation
+CLOUD_SHADOW_MIN_GAP_W = (
+    50.0  # Minimum W gap between limit and PV output for low-generation detection
+)
 
 # RLS estimator tuning
 RLS_EPSILON = 1e-9  # Numerical guard: skip update if denominator < this
@@ -172,6 +200,7 @@ RESPONSE_FACTORS = {
 
 # Platforms
 PLATFORMS = [
+    Platform.BINARY_SENSOR,
     Platform.SENSOR,
     Platform.NUMBER,
     Platform.SWITCH,
@@ -182,3 +211,12 @@ PLATFORMS = [
 SERVICE_RESET_PID = "reset_pid"
 SERVICE_RECALIBRATE = "recalibrate"
 SERVICE_OVERRIDE_SETPOINT = "override_setpoint"
+
+# Telemetry freshness
+CONF_SENSOR_STALE_S = "sensor_stale_s"
+DEFAULT_SENSOR_STALE_S = CONTROL_INTERVAL_S * 3  # 15 s
+SENSOR_STALE_SECONDS = DEFAULT_SENSOR_STALE_S  # backward-compat alias
+
+# Configurable calibration safety limit
+CONF_CALIB_MAX_GRID_W = "calib_max_grid_w"
+DEFAULT_CALIB_MAX_GRID_W = CALIB_MAX_GRID_W  # 3000 W

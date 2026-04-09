@@ -50,9 +50,12 @@ async def async_get_config_entry_diagnostics(
                 "d": d.pid_d_w,
             },
             "mode": d.mode,
+            "status": d.status,
             "battery_clipping": d.battery_clipping,
             "learning_status": d.learning_status,
             "setpoints": d.setpoints,
+            "battery_setpoints": d.battery_setpoints,
+            "battery_unresponsive": d.battery_unresponsive,
             "array_clipping": d.array_clipping,
             "array_gain_k": d.array_gain_k,
             "array_calibration": d.array_calibration,
@@ -66,8 +69,8 @@ async def async_get_config_entry_diagnostics(
             "ki": pid.ki,
             "kd": pid.kd,
             "integral": pid.integral,
-            "output_min": pid._output_min,
-            "output_max": pid._output_max,
+            "output_min": pid.output_min,
+            "output_max": pid.output_max,
         }
 
     # Array configurations
@@ -87,7 +90,7 @@ async def async_get_config_entry_diagnostics(
     now = time.monotonic()
     override_setpoints: dict[str, Any] = {}
     if coordinator is not None:
-        for name, (value, expires_at) in coordinator._override_setpoints.items():
+        for name, (value, expires_at) in coordinator.override_setpoints.items():
             remaining = max(0.0, expires_at - now)
             override_setpoints[name] = {
                 "value": value,
@@ -97,8 +100,9 @@ async def async_get_config_entry_diagnostics(
     # Settling state per array (seconds remaining, 0 if not settling)
     settling_state: dict[str, float] = {}
     if coordinator is not None:
+        settling_until = coordinator.settling_until
         for array in coordinator.arrays:
-            until = coordinator._settling_until.get(array.name, 0.0)
+            until = settling_until.get(array.name, 0.0)
             settling_state[array.name] = round(max(0.0, until - now), 1)
 
     # Estimator details
@@ -143,6 +147,8 @@ async def async_get_config_entry_diagnostics(
                 if coordinator.update_interval is not None
                 else None
             ),
+            "controller_enabled": coordinator.controller_enabled,
+            "safe_state_applied": coordinator.safe_state_applied,
         }
 
     ent_reg = er.async_get(hass)
@@ -164,7 +170,7 @@ async def async_get_config_entry_diagnostics(
             "subentries": {
                 sub.title: {
                     "type": sub.subentry_type,
-                    "data": dict(sub.data),
+                    "data": async_redact_data(dict(sub.data), TO_REDACT),
                 }
                 for sub in entry.subentries.values()
             },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from inspect import isawaitable
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -10,7 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import ARRAY_SUBENTRY_TYPE
 from .coordinator import ZeroGridCoordinator
@@ -23,19 +24,15 @@ PARALLEL_UPDATES = 0
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up enable/disable switches."""
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
     array_devices: dict[str, DeviceInfo] = entry.runtime_data.array_devices
 
-    entities: list[SwitchEntity] = [
-        # Master controller enable/disable switch
-        ZGCMasterEnableSwitch(coordinator, entry, main_device),
-    ]
+    async_add_entities([ZGCMasterEnableSwitch(coordinator, entry, main_device)])
 
-    # Per-array enable switches
     for subentry in entry.subentries.values():
         if subentry.subentry_type != ARRAY_SUBENTRY_TYPE:
             continue
@@ -43,9 +40,14 @@ async def async_setup_entry(
         device = array_devices.get(subentry.subentry_id)
         if device is None:
             continue
-        entities.append(ZGCArrayEnableSwitch(coordinator, entry, device, array_name))
-
-    async_add_entities(entities)
+        async_add_entities(
+            [
+                ZGCArrayEnableSwitch(
+                    coordinator, entry, device, subentry.subentry_id, array_name
+                )
+            ],
+            config_subentry_id=subentry.subentry_id,
+        )
 
 
 class ZGCArrayEnableSwitch(SwitchEntity):
@@ -59,12 +61,13 @@ class ZGCArrayEnableSwitch(SwitchEntity):
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
+        subentry_id: str,
         array_name: str,
     ) -> None:
         self._coordinator = coordinator
         self._entry = entry
         self._array_name = array_name
-        self._attr_unique_id = f"{entry.entry_id}_{array_name}_enabled"
+        self._attr_unique_id = f"{entry.entry_id}_{subentry_id}_enabled"
         self._attr_device_info = device
         self._attr_translation_key = "array_enabled"
 
@@ -74,13 +77,19 @@ class ZGCArrayEnableSwitch(SwitchEntity):
         return array.enabled if array is not None else True
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        self._coordinator.apply_array_config_update(self._array_name, {"enabled": True})
+        result = self._coordinator.async_update_array_config(
+            self._array_name, {"enabled": True}
+        )
+        if isawaitable(result):
+            await result
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        self._coordinator.apply_array_config_update(
+        result = self._coordinator.async_update_array_config(
             self._array_name, {"enabled": False}
         )
+        if isawaitable(result):
+            await result
         self.async_write_ha_state()
 
 
@@ -115,7 +124,7 @@ class ZGCMasterEnableSwitch(SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable the controller."""
         _LOGGER.info("Enabling Zero Grid Controller")
-        self._coordinator.set_controller_enabled(True)
+        await self._coordinator.async_set_controller_enabled(True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -123,6 +132,6 @@ class ZGCMasterEnableSwitch(SwitchEntity):
         _LOGGER.info(
             "Disabling Zero Grid Controller - setting PV to max, batteries to 0"
         )
-        self._coordinator.set_controller_enabled(False)
-        await self._coordinator.apply_disabled_state()
+        await self._coordinator.async_set_controller_enabled(False)
+        await self._coordinator.async_enter_safe_state(force=True)
         self.async_write_ha_state()

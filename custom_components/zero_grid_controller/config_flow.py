@@ -21,6 +21,7 @@ from .const import (
     CONF_BATTERY_MAX_DISCHARGE_W,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_CALIB_MAX_GRID_W,
     CONF_CALIBRATION_CONFIDENCE,
     CONF_EXPERT_MODE,
     CONF_GRID_EXPORT_SENSORS,
@@ -34,16 +35,26 @@ from .const import (
     CONF_OUTPUT_TYPE,
     CONF_PV_POWER_ENTITY,
     CONF_RESPONSE_FACTOR,
+    CONF_SENSOR_STALE_S,
     CONF_SETPOINT_ENTITY,
     CONF_SETPOINT_MAX,
     CONF_SETPOINT_MIN,
     CONF_SETTLING_TIME_S,
+    CONF_SWITCH_DEBOUNCE_S,
+    CONF_SWITCH_OFF_THRESHOLD_W,
+    CONF_SWITCH_ON_THRESHOLD_W,
     CONF_W_PER_UNIT,
     DEFAULT_BATTERY_MAX_CHARGE_W,
+    DEFAULT_BATTERY_SETTLING_TIME_S,
+    DEFAULT_CALIB_MAX_GRID_W,
     DEFAULT_RESPONSE_FACTOR,
+    DEFAULT_SENSOR_STALE_S,
     DEFAULT_SETPOINT_MAX,
     DEFAULT_SETPOINT_MIN,
     DEFAULT_SETTLING_TIME_S,
+    DEFAULT_SWITCH_DEBOUNCE_S,
+    DEFAULT_SWITCH_OFF_THRESHOLD_W,
+    DEFAULT_SWITCH_ON_THRESHOLD_W,
     DEFAULT_W_PER_UNIT,
     DOMAIN,
     INVERTER_SPEED_SETTLING,
@@ -51,6 +62,9 @@ from .const import (
     OUTPUT_TYPE_SWITCH,
     OUTPUT_TYPE_WATT,
     RESPONSE_FACTORS,
+    SETTLING_TIME_MAX_S,
+    SETTLING_TIME_MIN_S,
+    SETTLING_TIME_STEP_S,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,57 +75,108 @@ _POWER_SENSOR_MULTI = selector(
 
 
 # ---------------------------------------------------------------------------
-# Battery subentry flow
+# Battery subentry flow — two steps: basics → control settings
 # ---------------------------------------------------------------------------
 
 
 class BatterySubEntryFlow(config_entries.ConfigSubentryFlow):
     """Flow for adding or editing a battery subentry."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._draft: dict[str, Any] = {}
+        self._reconfigure_mode: bool = False
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Handle adding a new battery."""
+        """Step 1 (add): basic battery settings."""
         if user_input is not None:
-            data = _build_battery_data(user_input)
-            return self.async_create_entry(
-                title=user_input.get(CONF_NAME) or "Battery",
-                data=data,
-            )
+            self._draft.update(user_input)
+            return await self.async_step_battery_control()
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_battery_schema(),
+            data_schema=_battery_basics_schema(self._draft),
         )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Handle editing an existing battery."""
-        entry = self._get_entry()
-        subentry = self._get_reconfigure_subentry()
-        current = dict(subentry.data)
+        """Step 1 (reconfigure): basic battery settings, pre-filled."""
+        self._reconfigure_mode = True
+        if not self._draft:
+            subentry = self._get_reconfigure_subentry()
+            self._draft = dict(subentry.data)
 
         if user_input is not None:
-            data = _build_battery_data(user_input)
-            return self.async_update_and_abort(
-                entry,
-                subentry,
-                title=user_input.get(CONF_NAME) or subentry.title,
-                data=data,
-            )
+            self._draft.update(user_input)
+            return await self.async_step_battery_control()
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_battery_schema(current),
+            data_schema=_battery_basics_schema(self._draft),
         )
 
+    async def async_step_battery_control(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 2: battery control settings."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if user_input.get(CONF_BATTERY_CONTROL_ENABLED) and not user_input.get(
+                CONF_BATTERY_SETPOINT_ENTITY
+            ):
+                errors[CONF_BATTERY_SETPOINT_ENTITY] = "setpoint_required"
+            battery_name = str(self._draft.get(CONF_NAME) or "").strip()
+            if battery_name and self._name_conflicts(
+                BATTERY_SUBENTRY_TYPE, battery_name
+            ):
+                errors[CONF_NAME] = "duplicate_name"
+            if not errors:
+                self._draft.update(user_input)
+                data = _build_battery_data(self._draft)
+                if self._reconfigure_mode:
+                    entry = self._get_entry()
+                    subentry = self._get_reconfigure_subentry()
+                    return self.async_update_and_abort(
+                        entry,
+                        subentry,
+                        title=self._draft.get(CONF_NAME) or subentry.title,
+                        data=data,
+                    )
+                return self.async_create_entry(
+                    title=self._draft.get(CONF_NAME) or "Battery",
+                    data=data,
+                )
 
-def _battery_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+        return self.async_show_form(
+            step_id="battery_control",
+            data_schema=_battery_control_schema(self._draft),
+            errors=errors,
+        )
+
+    def _name_conflicts(self, subentry_type: str, candidate: str) -> bool:
+        """Return True if another subentry of the same type already uses this name."""
+        entry = self._get_entry()
+        candidate_folded = candidate.casefold()
+        current_id = None
+        if self._reconfigure_mode:
+            current_id = self._get_reconfigure_subentry().subentry_id
+        for subentry in entry.subentries.values():
+            if (
+                subentry.subentry_type != subentry_type
+                or subentry.subentry_id == current_id
+            ):
+                continue
+            existing_name = str(subentry.data.get(CONF_NAME) or subentry.title).strip()
+            if existing_name and existing_name.casefold() == candidate_folded:
+                return True
+        return False
+
+
+def _battery_basics_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     d = defaults or {}
-    current_speed = _factor_to_speed(
-        float(d.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR))
-    )
     return vol.Schema(
         {
             vol.Optional(
@@ -132,6 +197,17 @@ def _battery_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=100, max=50000)),
+        }
+    )
+
+
+def _battery_control_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    d = defaults or {}
+    current_speed = _factor_to_speed(
+        float(d.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR))
+    )
+    return vol.Schema(
+        {
             vol.Optional(
                 CONF_BATTERY_CONTROL_ENABLED,
                 default=d.get(CONF_BATTERY_CONTROL_ENABLED, False),
@@ -151,74 +227,177 @@ def _battery_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     }
                 }
             ),
+            vol.Required(
+                CONF_SETTLING_TIME_S,
+                default=int(
+                    d.get(CONF_SETTLING_TIME_S, DEFAULT_BATTERY_SETTLING_TIME_S)
+                ),
+            ): selector(
+                {
+                    "number": {
+                        "min": SETTLING_TIME_MIN_S,
+                        "max": SETTLING_TIME_MAX_S,
+                        "step": SETTLING_TIME_STEP_S,
+                        "unit_of_measurement": "s",
+                        "mode": "box",
+                    }
+                }
+            ),
         }
     )
 
 
-def _build_battery_data(user_input: dict[str, Any]) -> dict[str, Any]:
-    speed = user_input.get("response_speed", "normal")
+def _build_battery_data(draft: dict[str, Any]) -> dict[str, Any]:
+    speed = draft.get("response_speed", "normal")
     data: dict[str, Any] = {
-        CONF_BATTERY_SENSOR: user_input[CONF_BATTERY_SENSOR],
+        CONF_BATTERY_SENSOR: draft[CONF_BATTERY_SENSOR],
         CONF_BATTERY_MAX_CHARGE_W: float(
-            user_input.get(CONF_BATTERY_MAX_CHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W)
+            draft.get(CONF_BATTERY_MAX_CHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W)
         ),
         CONF_BATTERY_MAX_DISCHARGE_W: float(
-            user_input.get(CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W)
+            draft.get(CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W)
         ),
         CONF_BATTERY_CONTROL_ENABLED: bool(
-            user_input.get(CONF_BATTERY_CONTROL_ENABLED, False)
+            draft.get(CONF_BATTERY_CONTROL_ENABLED, False)
         ),
         CONF_RESPONSE_FACTOR: RESPONSE_FACTORS.get(speed, DEFAULT_RESPONSE_FACTOR),
+        CONF_SETTLING_TIME_S: int(
+            draft.get(CONF_SETTLING_TIME_S, DEFAULT_BATTERY_SETTLING_TIME_S)
+        ),
     }
-    if name := user_input.get(CONF_NAME, "").strip():
+    if name := draft.get(CONF_NAME, "").strip():
         data[CONF_NAME] = name
-    if setpoint := user_input.get(CONF_BATTERY_SETPOINT_ENTITY):
+    if setpoint := draft.get(CONF_BATTERY_SETPOINT_ENTITY):
         data[CONF_BATTERY_SETPOINT_ENTITY] = setpoint
     return data
 
 
 # ---------------------------------------------------------------------------
-# Array subentry flow
+# Array subentry flow — add: basics → setpoint_range or switch_params
+#                       reconfigure: reconfigure → setpoint_range or switch_params
+#                                    → recalibrate_option
 # ---------------------------------------------------------------------------
 
 
 class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
     """Flow for adding or editing a PV array subentry."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._draft: dict[str, Any] = {}
+        self._reconfigure_mode: bool = False
+
+    # --- Step 1 (add): basics ---
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Handle adding a new PV array."""
+        """Step 1 (add): basic array settings."""
         if user_input is not None:
-            data = _build_array_data(user_input)
-            return self.async_create_entry(
-                title=user_input.get(CONF_ARRAY_NAME) or "PV Array",
-                data=data,
-            )
+            errors = _validate_array_basics(user_input)
+            if not errors and self._name_conflicts(user_input[CONF_ARRAY_NAME]):
+                errors[CONF_ARRAY_NAME] = "duplicate_name"
+            if errors:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=_array_basics_schema(user_input),
+                    errors=errors,
+                )
+            self._draft.update(user_input)
+            output_type = user_input.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT)
+            if output_type == OUTPUT_TYPE_SWITCH:
+                return await self.async_step_switch_params()
+            return await self.async_step_setpoint_range()
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_array_schema(),
+            data_schema=_array_basics_schema(self._draft),
         )
+
+    # --- Step 1 (reconfigure): basics pre-filled ---
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Handle editing an existing PV array."""
-        entry = self._get_entry()
-        subentry = self._get_reconfigure_subentry()
-        current = dict(subentry.data)
+        """Step 1 (reconfigure): basic array settings, pre-filled."""
+        self._reconfigure_mode = True
+        if not self._draft:
+            subentry = self._get_reconfigure_subentry()
+            self._draft = dict(subentry.data)
 
         if user_input is not None:
-            if user_input.pop("_recalibrate", False):
-                # Fire recalibrate service for this array after saving
-                data = _build_array_data(user_input)
-                result = self.async_update_and_abort(
-                    entry,
-                    subentry,
-                    title=user_input.get(CONF_ARRAY_NAME) or subentry.title,
-                    data=data,
+            errors = _validate_array_basics(user_input)
+            if not errors and self._name_conflicts(user_input[CONF_ARRAY_NAME]):
+                errors[CONF_ARRAY_NAME] = "duplicate_name"
+            if errors:
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=_array_basics_schema(user_input),
+                    errors=errors,
                 )
+            self._draft.update(user_input)
+            output_type = user_input.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT)
+            if output_type == OUTPUT_TYPE_SWITCH:
+                return await self.async_step_switch_params()
+            return await self.async_step_setpoint_range()
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_array_basics_schema(self._draft),
+        )
+
+    # --- Step 2a: setpoint range (percent / watt) ---
+
+    async def async_step_setpoint_range(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 2 for percent/watt arrays: setpoint range and inverter timing."""
+        if user_input is not None:
+            self._draft.update(user_input)
+            if self._reconfigure_mode:
+                return await self.async_step_recalibrate_option()
+            return self._finalize_create()
+
+        return self.async_show_form(
+            step_id="setpoint_range",
+            data_schema=_array_setpoint_range_schema(self._draft),
+        )
+
+    # --- Step 2b: switch parameters ---
+
+    async def async_step_switch_params(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 2 for switch arrays: on/off thresholds and debounce."""
+        if user_input is not None:
+            self._draft.update(user_input)
+            if self._reconfigure_mode:
+                return await self.async_step_recalibrate_option()
+            return self._finalize_create()
+
+        return self.async_show_form(
+            step_id="switch_params",
+            data_schema=_array_switch_params_schema(self._draft),
+        )
+
+    # --- Step 3 (reconfigure only): optional recalibration ---
+
+    async def async_step_recalibrate_option(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 3 (reconfigure only): optionally trigger recalibration after saving."""
+        if user_input is not None:
+            recalibrate = user_input.get("_recalibrate", False)
+            entry = self._get_entry()
+            subentry = self._get_reconfigure_subentry()
+            data = _build_array_data(self._draft)
+            result = self.async_update_and_abort(
+                entry,
+                subentry,
+                title=self._draft.get(CONF_ARRAY_NAME) or subentry.title,
+                data=data,
+            )
+            if recalibrate:
                 self.hass.async_create_task(
                     self.hass.services.async_call(
                         DOMAIN,
@@ -227,120 +406,209 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
                         blocking=False,
                     )
                 )
-                return result
-
-            data = _build_array_data(user_input)
-            return self.async_update_and_abort(
-                entry,
-                subentry,
-                title=user_input.get(CONF_ARRAY_NAME) or subentry.title,
-                data=data,
-            )
+            return result
 
         return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=_array_schema(current, reconfigure=True),
+            step_id="recalibrate_option",
+            data_schema=vol.Schema({vol.Optional("_recalibrate", default=False): bool}),
         )
 
+    def _finalize_create(self) -> SubentryFlowResult:
+        data = _build_array_data(self._draft)
+        return self.async_create_entry(
+            title=self._draft.get(CONF_ARRAY_NAME) or "PV Array",
+            data=data,
+        )
 
-def _array_schema(
-    defaults: dict[str, Any] | None = None,
-    reconfigure: bool = False,
-) -> vol.Schema:
+    def _name_conflicts(self, candidate: str) -> bool:
+        """Return True if another array already uses this name."""
+        entry = self._get_entry()
+        candidate_folded = candidate.strip().casefold()
+        current_id = None
+        if self._reconfigure_mode:
+            current_id = self._get_reconfigure_subentry().subentry_id
+        for subentry in entry.subentries.values():
+            if (
+                subentry.subentry_type != ARRAY_SUBENTRY_TYPE
+                or subentry.subentry_id == current_id
+            ):
+                continue
+            existing_name = str(
+                subentry.data.get(CONF_ARRAY_NAME, subentry.subentry_id)
+            ).strip()
+            if existing_name.casefold() == candidate_folded:
+                return True
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Array schema helpers
+# ---------------------------------------------------------------------------
+
+
+def _array_basics_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    d = defaults or {}
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_ARRAY_NAME,
+                description={"suggested_value": d.get(CONF_ARRAY_NAME)},
+            ): str,
+            vol.Required(
+                CONF_SETPOINT_ENTITY,
+                description={"suggested_value": d.get(CONF_SETPOINT_ENTITY)},
+            ): selector({"entity": {"domain": ["number", "switch"]}}),
+            vol.Required(
+                CONF_OUTPUT_TYPE,
+                default=d.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT),
+            ): selector(
+                {
+                    "select": {
+                        "options": [
+                            OUTPUT_TYPE_PERCENT,
+                            OUTPUT_TYPE_WATT,
+                            OUTPUT_TYPE_SWITCH,
+                        ],
+                        "translation_key": "output_type",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_PV_POWER_ENTITY,
+                description={"suggested_value": d.get(CONF_PV_POWER_ENTITY)},
+            ): selector({"entity": {"domain": "sensor", "device_class": "power"}}),
+        }
+    )
+
+
+def _array_setpoint_range_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     d = defaults or {}
     current_speed = _factor_to_speed(
         float(d.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR))
     )
-    fields: dict[Any, Any] = {
-        vol.Required(
-            CONF_ARRAY_NAME,
-            description={"suggested_value": d.get(CONF_ARRAY_NAME)},
-        ): str,
-        vol.Required(
-            CONF_SETPOINT_ENTITY,
-            description={"suggested_value": d.get(CONF_SETPOINT_ENTITY)},
-        ): selector({"entity": {"domain": ["number", "switch"]}}),
-        vol.Required(
-            CONF_OUTPUT_TYPE,
-            default=d.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT),
-        ): selector(
-            {
-                "select": {
-                    "options": [
-                        OUTPUT_TYPE_PERCENT,
-                        OUTPUT_TYPE_WATT,
-                        OUTPUT_TYPE_SWITCH,
-                    ],
-                    "translation_key": "output_type",
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_SETPOINT_MIN,
+                default=d.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0)),
+            vol.Optional(
+                CONF_SETPOINT_MAX,
+                default=d.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX),
+            ): vol.All(vol.Coerce(float), vol.Range(min=1)),
+            vol.Required(
+                CONF_INVERTER_SPEED,
+                default=d.get(CONF_INVERTER_SPEED, "normal"),
+            ): selector(
+                {
+                    "select": {
+                        "options": ["slow", "normal", "fast"],
+                        "translation_key": "inverter_speed",
+                    }
                 }
-            }
-        ),
-        vol.Optional(
-            CONF_PV_POWER_ENTITY,
-            description={"suggested_value": d.get(CONF_PV_POWER_ENTITY)},
-        ): selector({"entity": {"domain": "sensor", "device_class": "power"}}),
-        vol.Required(
-            CONF_INVERTER_SPEED,
-            default=d.get(CONF_INVERTER_SPEED, "normal"),
-        ): selector(
-            {
-                "select": {
-                    "options": ["slow", "normal", "fast"],
-                    "translation_key": "inverter_speed",
+            ),
+            vol.Required(
+                "response_speed",
+                default=current_speed,
+            ): selector(
+                {
+                    "select": {
+                        "options": ["cautious", "normal", "fast"],
+                        "translation_key": "response_speed",
+                    }
                 }
-            }
-        ),
-        vol.Required(
-            "response_speed",
-            default=current_speed,
-        ): selector(
-            {
-                "select": {
-                    "options": ["cautious", "normal", "fast"],
-                    "translation_key": "response_speed",
-                }
-            }
-        ),
-        vol.Optional(
-            CONF_SETPOINT_MIN,
-            default=d.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN),
-        ): vol.All(vol.Coerce(float), vol.Range(min=0)),
-        vol.Optional(
-            CONF_SETPOINT_MAX,
-            default=d.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX),
-        ): vol.All(vol.Coerce(float), vol.Range(min=1)),
-    }
-    if reconfigure:
-        fields[vol.Optional("_recalibrate", default=False)] = bool
-    return vol.Schema(fields)
+            ),
+        }
+    )
 
 
-def _build_array_data(user_input: dict[str, Any]) -> dict[str, Any]:
-    speed = user_input.get(CONF_INVERTER_SPEED, "normal")
-    response_speed = user_input.get("response_speed", "normal")
+def _array_switch_params_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    d = defaults or {}
+    current_speed = _factor_to_speed(
+        float(d.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR))
+    )
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_SWITCH_ON_THRESHOLD_W,
+                default=d.get(
+                    CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0)),
+            vol.Optional(
+                CONF_SWITCH_OFF_THRESHOLD_W,
+                default=d.get(
+                    CONF_SWITCH_OFF_THRESHOLD_W, DEFAULT_SWITCH_OFF_THRESHOLD_W
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0)),
+            vol.Optional(
+                CONF_SWITCH_DEBOUNCE_S,
+                default=d.get(CONF_SWITCH_DEBOUNCE_S, DEFAULT_SWITCH_DEBOUNCE_S),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+            vol.Required(
+                "response_speed",
+                default=current_speed,
+            ): selector(
+                {
+                    "select": {
+                        "options": ["cautious", "normal", "fast"],
+                        "translation_key": "response_speed",
+                    }
+                }
+            ),
+        }
+    )
+
+
+def _validate_array_basics(user_input: dict[str, Any]) -> dict[str, str]:
+    """Validate compatibility between output type and selected setpoint entity."""
+    errors: dict[str, str] = {}
+    entity_id = str(user_input.get(CONF_SETPOINT_ENTITY, ""))
+    entity_domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+    output_type = user_input.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT)
+
+    if (
+        output_type == OUTPUT_TYPE_SWITCH
+        and entity_domain != "switch"
+        or output_type in (OUTPUT_TYPE_PERCENT, OUTPUT_TYPE_WATT)
+        and entity_domain != "number"
+    ):
+        errors[CONF_SETPOINT_ENTITY] = "setpoint_entity_mismatch"
+
+    return errors
+
+
+def _build_array_data(draft: dict[str, Any]) -> dict[str, Any]:
+    speed = draft.get(CONF_INVERTER_SPEED, "normal")
+    response_speed = draft.get("response_speed", "normal")
     settling_time_s = INVERTER_SPEED_SETTLING.get(speed, DEFAULT_SETTLING_TIME_S)
     data: dict[str, Any] = {
-        CONF_ARRAY_NAME: user_input.get(CONF_ARRAY_NAME, "PV Array"),
-        CONF_SETPOINT_ENTITY: user_input.get(CONF_SETPOINT_ENTITY, ""),
-        CONF_OUTPUT_TYPE: user_input.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT),
+        CONF_ARRAY_NAME: draft.get(CONF_ARRAY_NAME, "PV Array"),
+        CONF_SETPOINT_ENTITY: draft.get(CONF_SETPOINT_ENTITY, ""),
+        CONF_OUTPUT_TYPE: draft.get(CONF_OUTPUT_TYPE, OUTPUT_TYPE_PERCENT),
         CONF_INVERTER_SPEED: speed,
         CONF_SETTLING_TIME_S: settling_time_s,
-        CONF_SETPOINT_MIN: float(
-            user_input.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN)
-        ),
-        CONF_SETPOINT_MAX: float(
-            user_input.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)
-        ),
-        CONF_W_PER_UNIT: float(user_input.get(CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT)),
-        CONF_CALIBRATION_CONFIDENCE: user_input.get(
+        CONF_SETPOINT_MIN: float(draft.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN)),
+        CONF_SETPOINT_MAX: float(draft.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)),
+        CONF_W_PER_UNIT: float(draft.get(CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT)),
+        CONF_CALIBRATION_CONFIDENCE: draft.get(
             CONF_CALIBRATION_CONFIDENCE, CALIBRATION_CONFIDENCE_ESTIMATED
         ),
         CONF_RESPONSE_FACTOR: RESPONSE_FACTORS.get(
             response_speed, DEFAULT_RESPONSE_FACTOR
         ),
+        CONF_SWITCH_ON_THRESHOLD_W: float(
+            draft.get(CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W)
+        ),
+        CONF_SWITCH_OFF_THRESHOLD_W: float(
+            draft.get(CONF_SWITCH_OFF_THRESHOLD_W, DEFAULT_SWITCH_OFF_THRESHOLD_W)
+        ),
+        CONF_SWITCH_DEBOUNCE_S: int(
+            draft.get(CONF_SWITCH_DEBOUNCE_S, DEFAULT_SWITCH_DEBOUNCE_S)
+        ),
         "enabled": True,
     }
-    if pv := user_input.get(CONF_PV_POWER_ENTITY):
+    if pv := draft.get(CONF_PV_POWER_ENTITY):
         data[CONF_PV_POWER_ENTITY] = pv
     return data
 
@@ -488,16 +756,23 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class ZeroGridOptionsFlow(config_entries.OptionsFlow):
-    """Options flow: expert mode only (response speed is per array/battery)."""
+    """Options flow: expert mode and site-wide tuning parameters."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        opts = self.config_entry.options
         if user_input is not None:
             return self.async_create_entry(
                 data={
-                    **self.config_entry.options,
+                    **opts,
                     CONF_EXPERT_MODE: user_input.get(CONF_EXPERT_MODE, False),
+                    CONF_SENSOR_STALE_S: int(
+                        user_input.get(CONF_SENSOR_STALE_S, DEFAULT_SENSOR_STALE_S)
+                    ),
+                    CONF_CALIB_MAX_GRID_W: float(
+                        user_input.get(CONF_CALIB_MAX_GRID_W, DEFAULT_CALIB_MAX_GRID_W)
+                    ),
                 }
             )
 
@@ -507,8 +782,40 @@ class ZeroGridOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required(
                         CONF_EXPERT_MODE,
-                        default=self.config_entry.options.get(CONF_EXPERT_MODE, False),
-                    ): bool
+                        default=opts.get(CONF_EXPERT_MODE, False),
+                    ): bool,
+                    vol.Required(
+                        CONF_SENSOR_STALE_S,
+                        default=int(
+                            opts.get(CONF_SENSOR_STALE_S, DEFAULT_SENSOR_STALE_S)
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 5,
+                                "max": 300,
+                                "step": 5,
+                                "unit_of_measurement": "s",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_MAX_GRID_W,
+                        default=float(
+                            opts.get(CONF_CALIB_MAX_GRID_W, DEFAULT_CALIB_MAX_GRID_W)
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 500,
+                                "max": 50000,
+                                "step": 100,
+                                "unit_of_measurement": "W",
+                                "mode": "box",
+                            }
+                        }
+                    ),
                 }
             ),
         )

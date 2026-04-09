@@ -228,12 +228,12 @@ async def test_options_flow_expert_mode(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Add PV array subentry
+# Test 7: Add PV array subentry — multi-step (basics → setpoint_range)
 # ---------------------------------------------------------------------------
 
 
 async def test_subentry_flow_add_array(hass: HomeAssistant) -> None:
-    """Test adding a PV array subentry."""
+    """Test adding a PV array subentry via two-step flow."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
@@ -247,6 +247,7 @@ async def test_subentry_flow_add_array(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     hass.states.async_set("number.inverter_limit", "100")
 
+    # Step 1: basics
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, ARRAY_SUBENTRY_TYPE),
         context={"source": config_entries.SOURCE_USER},
@@ -260,10 +261,19 @@ async def test_subentry_flow_add_array(hass: HomeAssistant) -> None:
             CONF_ARRAY_NAME: "Roof South",
             CONF_SETPOINT_ENTITY: "number.inverter_limit",
             CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-            CONF_INVERTER_SPEED: "normal",
-            "response_speed": "normal",
+        },
+    )
+    # Step 2: setpoint range (routed because output_type != switch)
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "setpoint_range"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
             "setpoint_min": 0.0,
             "setpoint_max": 100.0,
+            CONF_INVERTER_SPEED: "normal",
+            "response_speed": "normal",
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -273,8 +283,52 @@ async def test_subentry_flow_add_array(hass: HomeAssistant) -> None:
     assert result["data"][CONF_RESPONSE_FACTOR] == 1.0
 
 
+async def test_subentry_flow_duplicate_array_name_rejected(
+    hass: HomeAssistant,
+) -> None:
+    """Array names must stay unique because runtime control references them."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        subentries_data=[
+            {
+                "subentry_type": ARRAY_SUBENTRY_TYPE,
+                "title": "Roof South",
+                "data": {
+                    CONF_ARRAY_NAME: "Roof South",
+                    CONF_SETPOINT_ENTITY: "number.inverter_limit_a",
+                    CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
+                },
+                "unique_id": None,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_ARRAY_NAME: "Roof South",
+            CONF_SETPOINT_ENTITY: "number.inverter_limit_b",
+            CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"][CONF_ARRAY_NAME] == "duplicate_name"
+
+
 # ---------------------------------------------------------------------------
-# Test 8: Reconfigure PV array subentry
+# Test 8: Reconfigure PV array subentry — multi-step with recalibrate option
 # ---------------------------------------------------------------------------
 
 
@@ -314,6 +368,7 @@ async def test_subentry_reconfigure_array(hass: HomeAssistant) -> None:
     subentry_id = next(iter(entry.subentries))
     hass.states.async_set("number.inverter_limit", "100")
 
+    # Step 1: reconfigure basics
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, ARRAY_SUBENTRY_TYPE),
         context={
@@ -330,12 +385,28 @@ async def test_subentry_reconfigure_array(hass: HomeAssistant) -> None:
             CONF_ARRAY_NAME: "Roof South Updated",
             CONF_SETPOINT_ENTITY: "number.inverter_limit",
             CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-            CONF_INVERTER_SPEED: "fast",
-            "response_speed": "fast",
+        },
+    )
+    # Step 2: setpoint range
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "setpoint_range"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
             "setpoint_min": 10.0,
             "setpoint_max": 100.0,
-            "_recalibrate": False,
+            CONF_INVERTER_SPEED: "fast",
+            "response_speed": "fast",
         },
+    )
+    # Step 3: recalibrate option (reconfigure only)
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "recalibrate_option"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={"_recalibrate": False},
     )
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
@@ -345,12 +416,68 @@ async def test_subentry_reconfigure_array(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 9: Add battery subentry
+# Test 9: Add battery subentry — multi-step (basics → battery_control)
 # ---------------------------------------------------------------------------
 
 
 async def test_subentry_flow_add_battery(hass: HomeAssistant) -> None:
-    """Test adding a battery subentry."""
+    """Test adding a battery subentry via two-step flow."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("sensor.battery_power", "0")
+
+    # Step 1: basics
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, BATTERY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "user"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "name": "Home Battery",
+            "battery_sensor": "sensor.battery_power",
+            "battery_max_charge_w": 3000.0,
+            "battery_max_discharge_w": 3000.0,
+        },
+    )
+    # Step 2: control settings
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "battery_control"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "battery_control_enabled": False,
+            "response_speed": "cautious",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Home Battery"
+    assert result["data"]["battery_sensor"] == "sensor.battery_power"
+    assert result["data"][CONF_RESPONSE_FACTOR] == 0.5  # cautious → 0.5
+
+
+# ---------------------------------------------------------------------------
+# Test 9b: Battery control enabled without setpoint entity → validation error
+# ---------------------------------------------------------------------------
+
+
+async def test_subentry_battery_control_enabled_requires_setpoint(
+    hass: HomeAssistant,
+) -> None:
+    """Battery control_enabled=True without setpoint entity returns an error."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
@@ -368,9 +495,6 @@ async def test_subentry_flow_add_battery(hass: HomeAssistant) -> None:
         (entry.entry_id, BATTERY_SUBENTRY_TYPE),
         context={"source": config_entries.SOURCE_USER},
     )
-    assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "user"
-
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
         user_input={
@@ -378,14 +502,22 @@ async def test_subentry_flow_add_battery(hass: HomeAssistant) -> None:
             "battery_sensor": "sensor.battery_power",
             "battery_max_charge_w": 3000.0,
             "battery_max_discharge_w": 3000.0,
-            "battery_control_enabled": False,
-            "response_speed": "cautious",
         },
     )
-    assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Home Battery"
-    assert result["data"]["battery_sensor"] == "sensor.battery_power"
-    assert result["data"][CONF_RESPONSE_FACTOR] == 0.5  # cautious → 0.5
+    assert result["step_id"] == "battery_control"
+
+    # Enable control without providing setpoint entity
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "battery_control_enabled": True,
+            # battery_setpoint_entity intentionally absent
+            "response_speed": "normal",
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "battery_control"
+    assert "battery_setpoint_entity" in result["errors"]
 
 
 # ---------------------------------------------------------------------------
@@ -413,22 +545,150 @@ async def test_subentry_array_with_pv_entity(hass: HomeAssistant) -> None:
         (entry.entry_id, ARRAY_SUBENTRY_TYPE),
         context={"source": config_entries.SOURCE_USER},
     )
-
+    # Step 1: basics with pv_power_entity
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
         user_input={
             CONF_ARRAY_NAME: "Roof South",
             CONF_SETPOINT_ENTITY: "number.inverter_limit",
             CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
-            CONF_INVERTER_SPEED: "normal",
-            "response_speed": "normal",
+            CONF_PV_POWER_ENTITY: "sensor.pv_power",
+        },
+    )
+    assert result["step_id"] == "setpoint_range"
+
+    # Step 2: setpoint range
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
             "setpoint_min": 0.0,
             "setpoint_max": 100.0,
-            CONF_PV_POWER_ENTITY: "sensor.pv_power",
+            CONF_INVERTER_SPEED: "normal",
+            "response_speed": "normal",
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_PV_POWER_ENTITY] == "sensor.pv_power"
+
+
+async def test_subentry_array_switch_output_requires_switch_entity(
+    hass: HomeAssistant,
+) -> None:
+    """Switch output type rejects a non-switch setpoint entity."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("number.inverter_limit", "100")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    # Mismatch: output_type=switch but entity is number.* → error in step 1
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_ARRAY_NAME: "Load Switch",
+            CONF_SETPOINT_ENTITY: "number.inverter_limit",
+            CONF_OUTPUT_TYPE: "switch",
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"][CONF_SETPOINT_ENTITY] == "setpoint_entity_mismatch"
+
+
+async def test_subentry_array_numeric_output_requires_number_entity(
+    hass: HomeAssistant,
+) -> None:
+    """Numeric output types reject switch entities."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("switch.inverter_enable", "on")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    # Mismatch: output_type=percent but entity is switch.* → error in step 1
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_ARRAY_NAME: "Roof South",
+            CONF_SETPOINT_ENTITY: "switch.inverter_enable",
+            CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"][CONF_SETPOINT_ENTITY] == "setpoint_entity_mismatch"
+
+
+async def test_subentry_switch_array_stores_hysteresis_settings(
+    hass: HomeAssistant,
+) -> None:
+    """Switch arrays persist their hysteresis thresholds and debounce settings."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("switch.inverter_enable", "off")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    # Step 1: basics — output_type=switch routes to switch_params
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_ARRAY_NAME: "PV Switch",
+            CONF_SETPOINT_ENTITY: "switch.inverter_enable",
+            CONF_OUTPUT_TYPE: "switch",
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "switch_params"
+
+    # Step 2: switch_params
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "switch_on_threshold_w": 180.0,
+            "switch_off_threshold_w": 70.0,
+            "switch_debounce_s": 45,
+            "response_speed": "normal",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"]["switch_on_threshold_w"] == 180.0
+    assert result["data"]["switch_off_threshold_w"] == 70.0
+    assert result["data"]["switch_debounce_s"] == 45
 
 
 # ---------------------------------------------------------------------------

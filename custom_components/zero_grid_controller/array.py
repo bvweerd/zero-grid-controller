@@ -8,6 +8,20 @@ from typing import Any
 
 from .const import (
     ARRAY_CLIPPING_THRESHOLD,
+    CONF_ARRAY_NAME,
+    CONF_CALIBRATION_CONFIDENCE,
+    CONF_OUTPUT_TYPE,
+    CONF_PV_POWER_ENTITY,
+    CONF_RESPONSE_FACTOR,
+    CONF_SETPOINT_ENTITY,
+    CONF_SETPOINT_MAX,
+    CONF_SETPOINT_MIN,
+    CONF_SETTLING_TIME_S,
+    CONF_SWITCH_DEBOUNCE_S,
+    CONF_SWITCH_OFF_THRESHOLD_W,
+    CONF_SWITCH_ON_THRESHOLD_W,
+    CONF_W_PER_UNIT,
+    DEFAULT_RESPONSE_FACTOR,
     DEFAULT_SETPOINT_MAX,
     DEFAULT_SETPOINT_MIN,
     DEFAULT_SETTLING_TIME_S,
@@ -89,23 +103,6 @@ def array_config_from_subentry(
     subentry_id: str, data: Mapping[str, Any]
 ) -> ArrayConfig:
     """Build an ArrayConfig from a subentry data dict."""
-    from .const import (
-        CONF_ARRAY_NAME,
-        CONF_CALIBRATION_CONFIDENCE,
-        CONF_OUTPUT_TYPE,
-        CONF_PV_POWER_ENTITY,
-        CONF_RESPONSE_FACTOR,
-        CONF_SETPOINT_ENTITY,
-        CONF_SETPOINT_MAX,
-        CONF_SETPOINT_MIN,
-        CONF_SETTLING_TIME_S,
-        CONF_SWITCH_DEBOUNCE_S,
-        CONF_SWITCH_OFF_THRESHOLD_W,
-        CONF_SWITCH_ON_THRESHOLD_W,
-        CONF_W_PER_UNIT,
-        DEFAULT_RESPONSE_FACTOR,
-    )
-
     return ArrayConfig(
         name=data.get(CONF_ARRAY_NAME, subentry_id),
         enabled=data.get("enabled", True),

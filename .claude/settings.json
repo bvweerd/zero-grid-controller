@@ -1,0 +1,17 @@
+{
+  "model": "sonnet",
+  "respectGitignore": true,
+  "permissions": {
+    "allow": [
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git status*)",
+      "Bash(git show*)",
+      "Bash(python -m pytest*)",
+      "Bash(python -m mypy*)",
+      "Bash(python -m ruff*)",
+      "Bash(pip install -r*)",
+      "Bash(python -m homeassistant*)"
+    ]
+  }
+}

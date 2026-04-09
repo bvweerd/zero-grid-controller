@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -11,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
     CONF_ARRAY_NAME,
+    CONF_CONTROLLER_ENABLED,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
     CONF_INVERT_SIGN,
@@ -192,15 +194,17 @@ async def test_apply_array_config_update(hass: HomeAssistant) -> None:
 
 
 async def test_override_setpoint(hass: HomeAssistant) -> None:
-    """Test that override_setpoint stores a value with expiry."""
-    entry = _make_entry(hass)
+    """Test that async_override_setpoint stores a value with expiry."""
+    entry = _make_entry(hass, subentries_data=[_array_subentry_data()])
     coordinator = ZeroGridCoordinator(hass, entry)
 
-    coordinator.override_setpoint("Roof South", 75.0, duration_s=60.0)
+    with patch.object(coordinator, "_write_setpoint", new=AsyncMock()):
+        await coordinator.async_override_setpoint("Roof South", 75.0, duration_s=60.0)
     assert "Roof South" in coordinator._override_setpoints
     value, expires_at = coordinator._override_setpoints["Roof South"]
     assert value == 75.0
     assert expires_at > time.monotonic()
+    assert coordinator._current_setpoints["Roof South"] == 75.0
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +351,13 @@ async def test_property_accessors(hass: HomeAssistant) -> None:
     assert coordinator.controller_enabled is True
 
 
+async def test_controller_enabled_restored_from_options(hass: HomeAssistant) -> None:
+    """Controller enabled state is restored from config entry options."""
+    entry = _make_entry(hass, options={CONF_CONTROLLER_ENABLED: False})
+    coordinator = ZeroGridCoordinator(hass, entry)
+    assert coordinator.controller_enabled is False
+
+
 # ---------------------------------------------------------------------------
 # Test 19: read_grid_w — returns None when sensor unavailable
 # ---------------------------------------------------------------------------
@@ -392,3 +403,73 @@ async def test_estimator_state_restored(hass: HomeAssistant) -> None:
     restored = coordinator.get_estimator("Roof South")
     assert restored is not None
     assert restored.n_updates == 10
+
+
+# ---------------------------------------------------------------------------
+# Test 21: EWM cold-start — first cycle seeds filter from raw_w, not 0
+# ---------------------------------------------------------------------------
+
+
+async def test_ewm_cold_start_seeds_from_raw(hass: HomeAssistant) -> None:
+    """On the very first update cycle the EWM filter must be seeded from raw_w.
+
+    Without cold-start handling the filter initialises at 0 and ramps slowly
+    toward the actual grid reading, causing spurious PID output for several
+    cycles after startup.
+    """
+    entry = _make_entry(hass)
+    hass.states.async_set("sensor.grid_import", "400.0")
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    assert not coordinator._filtered_w_initialized
+
+    # Run one control-loop tick directly
+    with (
+        patch.object(
+            coordinator, "_distribute_and_write", new=AsyncMock(return_value={})
+        ),
+        patch.object(
+            coordinator, "_apply_battery_targets", new=AsyncMock(return_value={})
+        ),
+        patch.object(coordinator, "async_enter_safe_state", new=AsyncMock()),
+    ):
+        await coordinator._run_control_loop(dt=5.0, now=0.0)
+
+    # Filter must be seeded from the real grid reading, not from 0
+    assert coordinator._filtered_w_initialized
+    assert coordinator._filtered_w == pytest.approx(400.0, abs=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Test 22: async_start_calibration — concurrent guard returns False
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrent_calibration_guard(hass: HomeAssistant) -> None:
+    """async_start_calibration must refuse a second request while one is running."""
+    entry = _make_entry(hass, subentries_data=[_array_subentry_data()])
+    hass.states.async_set("sensor.grid_import", "0.0")
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    # Simulate an already-running calibration task
+    import asyncio as _asyncio
+
+    async def _never_completes() -> None:
+        await _asyncio.sleep(3600)
+
+    coordinator._calibration_task = hass.async_create_task(_never_completes())
+
+    assert coordinator.is_calibrating is True
+
+    # Second call must be rejected
+    result = coordinator.async_start_calibration(
+        coordinator.arrays, lambda msg, p: None
+    )
+    assert result is False
+
+    # Clean up the background task
+    coordinator._calibration_task.cancel()
+    import contextlib as _contextlib
+
+    with _contextlib.suppress(_asyncio.CancelledError):
+        await coordinator._calibration_task

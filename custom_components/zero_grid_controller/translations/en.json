@@ -29,7 +29,9 @@
       }
     },
     "error": {
-      "required": "This field is required."
+      "required": "This field is required.",
+      "setpoint_entity_mismatch": "The selected setpoint entity does not match the chosen output type.",
+      "duplicate_name": "This name is already in use."
     },
     "abort": {
       "already_configured": "Zero Grid Controller is already configured."
@@ -49,28 +51,50 @@
             "array_name": "Array name (e.g. Roof South)",
             "setpoint_entity": "Entity that sets the power limit",
             "output_type": "Output type",
-            "pv_power_entity": "PV power sensor (optional, improves cloud detection)",
-            "inverter_speed": "How fast does this inverter respond?",
-            "response_speed": "Control response speed",
-            "setpoint_min": "Minimum setpoint value",
-            "setpoint_max": "Maximum setpoint value"
+            "pv_power_entity": "PV power sensor (optional, improves cloud detection)"
           }
         },
         "reconfigure": {
           "title": "Configure PV array",
-          "description": "Update the settings for this PV array.",
+          "description": "Update the basic settings for this PV array.",
           "data": {
             "array_name": "Array name",
             "setpoint_entity": "Entity that sets the power limit",
             "output_type": "Output type",
-            "pv_power_entity": "PV power sensor (optional)",
-            "inverter_speed": "How fast does this inverter respond?",
-            "response_speed": "Control response speed",
+            "pv_power_entity": "PV power sensor (optional)"
+          }
+        },
+        "setpoint_range": {
+          "title": "Setpoint range & timing",
+          "description": "Configure the setpoint limits and how fast this inverter responds.",
+          "data": {
             "setpoint_min": "Minimum setpoint value",
             "setpoint_max": "Maximum setpoint value",
+            "inverter_speed": "How fast does this inverter respond?",
+            "response_speed": "Control response speed"
+          }
+        },
+        "switch_params": {
+          "title": "Switch control parameters",
+          "description": "Configure the grid power thresholds for turning this switch on and off.",
+          "data": {
+            "switch_on_threshold_w": "Turn on threshold (import W)",
+            "switch_off_threshold_w": "Turn off threshold (export W)",
+            "switch_debounce_s": "Minimum on/off time (s)",
+            "response_speed": "Control response speed"
+          }
+        },
+        "recalibrate_option": {
+          "title": "Save & calibrate",
+          "description": "Optionally re-run step-response calibration after saving. Run this on a sunny day for best results.",
+          "data": {
             "_recalibrate": "Re-run step-response calibration after saving"
           }
         }
+      },
+      "error": {
+        "setpoint_entity_mismatch": "The selected setpoint entity does not match the chosen output type.",
+        "duplicate_name": "This array name is already in use."
       }
     },
     "battery": {
@@ -84,27 +108,35 @@
           "description": "Configure a battery storage system for the controller to monitor and optionally control.",
           "data": {
             "name": "Battery name (e.g. Home Battery)",
-            "battery_sensor": "Battery power sensor (positive = charging)",
+            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
             "battery_max_charge_w": "Maximum charge power (W)",
-            "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_control_enabled": "Allow Zero Grid Controller to control battery setpoint",
-            "battery_setpoint_entity": "Battery setpoint entity",
-            "response_speed": "Control response speed"
+            "battery_max_discharge_w": "Maximum discharge power (W)"
           }
         },
         "reconfigure": {
           "title": "Configure battery",
-          "description": "Update the settings for this battery.",
+          "description": "Update the basic settings for this battery.",
           "data": {
             "name": "Battery name",
-            "battery_sensor": "Battery power sensor (positive = charging)",
+            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
             "battery_max_charge_w": "Maximum charge power (W)",
-            "battery_max_discharge_w": "Maximum discharge power (W)",
+            "battery_max_discharge_w": "Maximum discharge power (W)"
+          }
+        },
+        "battery_control": {
+          "title": "Battery control settings",
+          "description": "Configure whether Zero Grid Controller may actively command this battery's setpoint.",
+          "data": {
             "battery_control_enabled": "Allow Zero Grid Controller to control battery setpoint",
-            "battery_setpoint_entity": "Battery setpoint entity",
-            "response_speed": "Control response speed"
+            "battery_setpoint_entity": "Battery setpoint entity (required when control is enabled)",
+            "response_speed": "Control response speed",
+            "settling_time_s": "Settling time (s) — how long before the battery reaches its commanded power"
           }
         }
+      },
+      "error": {
+        "setpoint_required": "A setpoint entity is required when battery control is enabled.",
+        "duplicate_name": "This battery name is already in use."
       }
     }
   },
@@ -112,10 +144,12 @@
     "step": {
       "init": {
         "title": "Zero Grid Controller options",
+        "description": "Enable expert mode to manually tune PID and estimator parameters. The online auto-tuner is disabled when expert mode is active.\n\nFor advanced features like SoC-aware control, phase balancing, or time-of-use scheduling, use the [Battery Controller](https://github.com/bvweerd/battery-controller) integration and connect it via the optimizer mode entity above.",
         "data": {
-          "expert_mode": "Enable expert mode"
-        },
-        "description": "Enable expert mode to manually tune PID and estimator parameters. The online auto-tuner is disabled when expert mode is active."
+          "expert_mode": "Enable expert mode",
+          "sensor_stale_s": "Sensor freshness window (s) — data older than this is treated as unavailable",
+          "calib_max_grid_w": "Calibration safety limit (W) — abort calibration if |grid power| exceeds this"
+        }
       }
     }
   },
@@ -144,14 +178,19 @@
         "state": {
           "active": "Active",
           "passive": "Passive",
+          "disabled": "Disabled"
+        }
+      },
+      "status": {
+        "name": "Controller status",
+        "state": {
+          "active": "Active",
+          "passive": "Passive",
           "disabled": "Disabled",
           "deadband": "Deadband",
           "cloud_shadow": "Cloud shadow",
           "saturation": "Saturation"
         }
-      },
-      "battery_clipping": {
-        "name": "Battery clipping"
       },
       "learning_status": {
         "name": "Learning status"
@@ -170,6 +209,11 @@
       },
       "battery_setpoint": {
         "name": "Setpoint"
+      }
+    },
+    "binary_sensor": {
+      "battery_clipping": {
+        "name": "Battery clipping"
       }
     },
     "number": {

@@ -2,54 +2,18 @@
   "config": {
     "step": {
       "user": {
-        "title": "Zero Grid Controller — Grid sensor",
-        "description": "Select the sensor that measures grid power exchange.",
+        "title": "Zero Grid Controller — Grid Sensors",
+        "description": "Add the sensors that measure how much power is drawn from and delivered to the grid. Add PV arrays and batteries as subentries after setup.",
         "data": {
           "name": "Integration name",
-          "grid_measurement_type": "Measurement type",
-          "grid_sensor": "Grid power sensor (positive = importing)",
-          "invert_sign": "Invert sign (positive value means exporting)",
-          "grid_sensor_import": "Grid import sensor (power drawn from grid)",
-          "grid_sensor_export": "Grid export sensor (power delivered to grid)",
-          "power_consumption_sensors": "Consumption sensors (one or more)",
-          "power_production_sensors": "Production sensors (one or more, e.g. inverter)"
-        }
-      },
-      "add_array": {
-        "title": "Add a PV array",
-        "description": "Configure the PV inverter output you want the controller to manage.",
-        "data": {
-          "array_name": "Array name (e.g. Roof South)",
-          "setpoint_entity": "Entity that sets the power limit",
-          "output_type": "Output type",
-          "pv_power_entity": "PV power sensor (optional, improves cloud detection)",
-          "inverter_speed": "How fast does this inverter respond?",
-          "setpoint_min": "Minimum setpoint value",
-          "setpoint_max": "Maximum setpoint value",
-          "priority": "Priority (1 = highest)"
-        }
-      },
-      "another_array": {
-        "title": "Add another array?",
-        "data": {
-          "add_another": "Add another PV array"
-        }
-      },
-      "battery": {
-        "title": "Battery (optional)",
-        "description": "Configure your home battery so the controller can account for it.",
-        "data": {
-          "has_battery": "I have a home battery",
-          "battery_sensor": "Battery power sensor (positive = charging)",
-          "battery_max_charge_w": "Maximum charge power (W)",
-          "battery_max_discharge_w": "Maximum discharge power (W)",
-          "battery_control_enabled": "Let Zero Grid Controller also set battery target",
-          "battery_setpoint_entity": "Battery setpoint entity"
+          "grid_import_sensors": "Grid import sensors (power drawn from grid)",
+          "grid_export_sensors": "Grid export sensors (power delivered to grid, optional)",
+          "invert_sign": "Invert sign (if your import sensor shows negative values for import)"
         }
       },
       "mode_guard": {
         "title": "Optimizer integration (optional)",
-        "description": "Connect to an optimizer like Battery Controller to coordinate control modes.",
+        "description": "Connect to an optimizer like Battery Controller to coordinate control modes. When enabled, an external entity drives whether Zero Grid Controller runs actively, passively, or is disabled.",
         "data": {
           "mode_guard_enabled": "Use an optimizer mode entity",
           "mode_guard_entity": "Mode entity"
@@ -61,45 +25,131 @@
       },
       "done": {
         "title": "Setup complete",
-        "description": "Zero Grid Controller is ready. The controller will start learning your system automatically."
+        "description": "Zero Grid Controller is ready. Add PV arrays and batteries as subentries. The controller will start learning your system automatically."
       }
     },
     "error": {
       "required": "This field is required.",
-      "split_sensors_required": "Both import and export sensors are required for split measurement.",
-      "computed_sensors_required": "At least one consumption sensor and one production sensor are required for computed measurement."
+      "setpoint_entity_mismatch": "The selected setpoint entity does not match the chosen output type.",
+      "duplicate_name": "This name is already in use."
     },
     "abort": {
       "already_configured": "Zero Grid Controller is already configured."
+    }
+  },
+  "config_subentries": {
+    "array": {
+      "initiate_flow": {
+        "user": "Add PV array"
+      },
+      "entry_type": "PV Array",
+      "step": {
+        "user": {
+          "title": "Add PV array",
+          "description": "Configure the PV inverter output you want the controller to manage.",
+          "data": {
+            "array_name": "Array name (e.g. Roof South)",
+            "setpoint_entity": "Entity that sets the power limit",
+            "output_type": "Output type",
+            "pv_power_entity": "PV power sensor (optional, improves cloud detection)"
+          }
+        },
+        "reconfigure": {
+          "title": "Configure PV array",
+          "description": "Update the basic settings for this PV array.",
+          "data": {
+            "array_name": "Array name",
+            "setpoint_entity": "Entity that sets the power limit",
+            "output_type": "Output type",
+            "pv_power_entity": "PV power sensor (optional)"
+          }
+        },
+        "setpoint_range": {
+          "title": "Setpoint range & timing",
+          "description": "Configure the setpoint limits and how fast this inverter responds.",
+          "data": {
+            "setpoint_min": "Minimum setpoint value",
+            "setpoint_max": "Maximum setpoint value",
+            "inverter_speed": "How fast does this inverter respond?",
+            "response_speed": "Control response speed"
+          }
+        },
+        "switch_params": {
+          "title": "Switch control parameters",
+          "description": "Configure the grid power thresholds for turning this switch on and off.",
+          "data": {
+            "switch_on_threshold_w": "Turn on threshold (import W)",
+            "switch_off_threshold_w": "Turn off threshold (export W)",
+            "switch_debounce_s": "Minimum on/off time (s)",
+            "response_speed": "Control response speed"
+          }
+        },
+        "recalibrate_option": {
+          "title": "Save & calibrate",
+          "description": "Optionally re-run step-response calibration after saving. Run this on a sunny day for best results.",
+          "data": {
+            "_recalibrate": "Re-run step-response calibration after saving"
+          }
+        }
+      },
+      "error": {
+        "setpoint_entity_mismatch": "The selected setpoint entity does not match the chosen output type.",
+        "duplicate_name": "This array name is already in use."
+      }
+    },
+    "battery": {
+      "initiate_flow": {
+        "user": "Add battery"
+      },
+      "entry_type": "Battery",
+      "step": {
+        "user": {
+          "title": "Add battery",
+          "description": "Configure a battery storage system for the controller to monitor and optionally control.",
+          "data": {
+            "name": "Battery name (e.g. Home Battery)",
+            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
+            "battery_max_charge_w": "Maximum charge power (W)",
+            "battery_max_discharge_w": "Maximum discharge power (W)"
+          }
+        },
+        "reconfigure": {
+          "title": "Configure battery",
+          "description": "Update the basic settings for this battery.",
+          "data": {
+            "name": "Battery name",
+            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
+            "battery_max_charge_w": "Maximum charge power (W)",
+            "battery_max_discharge_w": "Maximum discharge power (W)"
+          }
+        },
+        "battery_control": {
+          "title": "Battery control settings",
+          "description": "Configure whether Zero Grid Controller may actively command this battery's setpoint.",
+          "data": {
+            "battery_control_enabled": "Allow Zero Grid Controller to control battery setpoint",
+            "battery_setpoint_entity": "Battery setpoint entity (required when control is enabled)",
+            "response_speed": "Control response speed",
+            "settling_time_s": "Settling time (s) — how long before the battery reaches its commanded power"
+          }
+        }
+      },
+      "error": {
+        "setpoint_required": "A setpoint entity is required when battery control is enabled.",
+        "duplicate_name": "This battery name is already in use."
+      }
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Zero Grid Controller options",
-        "menu_options": {
-          "speed": "Adjust response speed",
-          "expert": "Expert mode",
-          "recalibrate": "Re-run calibration"
-        }
-      },
-      "speed": {
-        "title": "Response speed",
-        "description": "Choose how aggressively the controller reacts to grid imbalance.",
+        "description": "Enable expert mode to manually tune PID and estimator parameters. The online auto-tuner is disabled when expert mode is active.\n\nFor advanced features like SoC-aware control, phase balancing, or time-of-use scheduling, use the [Battery Controller](https://github.com/bvweerd/battery-controller) integration and connect it via the optimizer mode entity above.",
         "data": {
-          "response_speed": "Response speed"
+          "expert_mode": "Enable expert mode",
+          "sensor_stale_s": "Sensor freshness window (s) — data older than this is treated as unavailable",
+          "calib_max_grid_w": "Calibration safety limit (W) — abort calibration if |grid power| exceeds this"
         }
-      },
-      "expert": {
-        "title": "Expert mode",
-        "description": "Enable expert mode to manually tune PID and estimator parameters. The online auto-tuner is disabled when expert mode is active.",
-        "data": {
-          "expert_mode": "Enable expert mode"
-        }
-      },
-      "recalibrate": {
-        "title": "Re-run calibration",
-        "description": "Calibration measures inverter response time and gain. Run this on a sunny day for best results."
       }
     }
   },
@@ -128,14 +178,19 @@
         "state": {
           "active": "Active",
           "passive": "Passive",
+          "disabled": "Disabled"
+        }
+      },
+      "status": {
+        "name": "Controller status",
+        "state": {
+          "active": "Active",
+          "passive": "Passive",
           "disabled": "Disabled",
           "deadband": "Deadband",
           "cloud_shadow": "Cloud shadow",
           "saturation": "Saturation"
         }
-      },
-      "battery_clipping": {
-        "name": "Battery clipping"
       },
       "learning_status": {
         "name": "Learning status"
@@ -151,6 +206,14 @@
       },
       "array_calibration": {
         "name": "Calibration confidence"
+      },
+      "battery_setpoint": {
+        "name": "Setpoint"
+      }
+    },
+    "binary_sensor": {
+      "battery_clipping": {
+        "name": "Battery clipping"
       }
     },
     "number": {
@@ -164,17 +227,15 @@
       "w_per_unit": { "name": "W per unit" }
     },
     "switch": {
-      "array_enabled": { "name": "Enabled" }
+      "array_enabled": { "name": "Enabled" },
+      "controller_enabled": { "name": "Controller enabled" }
+    },
+    "button": {
+      "reset_pid": { "name": "Reset PID" },
+      "recalibrate": { "name": "Recalibrate all arrays" }
     }
   },
   "selector": {
-    "grid_measurement_type": {
-      "options": {
-        "net": "Single net sensor (positive = import or export depending on sign)",
-        "split": "Two separate sensors (import + export)",
-        "computed": "Computed: grid = sum(consumption) − sum(production)"
-      }
-    },
     "output_type": {
       "options": {
         "percent": "Percentage (0–100%)",
@@ -207,7 +268,7 @@
   "issues": {
     "grid_sensor_unavailable": {
       "title": "Grid sensor unavailable",
-      "description": "The grid power sensor `{entity_id}` is unavailable. Zero Grid Controller cannot function without a valid grid measurement. Check that the sensor is configured correctly and the integration providing it is running."
+      "description": "One or more grid import sensors are unavailable. Zero Grid Controller cannot function without a valid grid measurement. Check that the sensors are configured correctly and the integrations providing them are running."
     }
   },
   "exceptions": {
@@ -227,16 +288,6 @@
         "array_name": {
           "name": "Array name",
           "description": "Name of the array to calibrate. Leave empty to calibrate all arrays."
-        }
-      }
-    },
-    "set_response_speed": {
-      "name": "Set response speed",
-      "description": "Set the controller response speed.",
-      "fields": {
-        "speed": {
-          "name": "Speed",
-          "description": "One of: cautious, normal, fast."
         }
       }
     },

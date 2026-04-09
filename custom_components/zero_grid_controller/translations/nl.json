@@ -29,7 +29,8 @@
       }
     },
     "error": {
-      "required": "Dit veld is verplicht."
+      "required": "Dit veld is verplicht.",
+      "setpoint_entity_mismatch": "De gekozen setpoint-entiteit past niet bij het geselecteerde uitvoertype."
     },
     "abort": {
       "already_configured": "Zero Grid Controller is al geconfigureerd."
@@ -49,28 +50,49 @@
             "array_name": "Array-naam (bijv. Dak Zuid)",
             "setpoint_entity": "Entiteit die de vermogenslimiet instelt",
             "output_type": "Uitvoertype",
-            "pv_power_entity": "PV-vermogensensor (optioneel, verbetert wolkendetectie)",
-            "inverter_speed": "Hoe snel reageert deze omvormer?",
-            "response_speed": "Besturingsresponssnelheid",
-            "setpoint_min": "Minimale setpoint-waarde",
-            "setpoint_max": "Maximale setpoint-waarde"
+            "pv_power_entity": "PV-vermogensensor (optioneel, verbetert wolkendetectie)"
           }
         },
         "reconfigure": {
           "title": "PV-array configureren",
-          "description": "Pas de instellingen van deze PV-array aan.",
+          "description": "Pas de basisinstellingen van deze PV-array aan.",
           "data": {
             "array_name": "Array-naam",
             "setpoint_entity": "Entiteit die de vermogenslimiet instelt",
             "output_type": "Uitvoertype",
-            "pv_power_entity": "PV-vermogensensor (optioneel)",
-            "inverter_speed": "Hoe snel reageert deze omvormer?",
-            "response_speed": "Besturingsresponssnelheid",
+            "pv_power_entity": "PV-vermogensensor (optioneel)"
+          }
+        },
+        "setpoint_range": {
+          "title": "Setpointbereik en timing",
+          "description": "Configureer de setpointlimieten en hoe snel deze omvormer reageert.",
+          "data": {
             "setpoint_min": "Minimale setpoint-waarde",
             "setpoint_max": "Maximale setpoint-waarde",
+            "inverter_speed": "Hoe snel reageert deze omvormer?",
+            "response_speed": "Besturingsresponssnelheid"
+          }
+        },
+        "switch_params": {
+          "title": "Schakelaarbesturingsparameters",
+          "description": "Configureer de gridvermogensdrempels voor het in- en uitschakelen van deze schakelaar.",
+          "data": {
+            "switch_on_threshold_w": "Inschakeldrempel (import W)",
+            "switch_off_threshold_w": "Uitschakeldrempel (export W)",
+            "switch_debounce_s": "Minimale aan/uit-tijd (s)",
+            "response_speed": "Besturingsresponssnelheid"
+          }
+        },
+        "recalibrate_option": {
+          "title": "Opslaan en kalibreren",
+          "description": "Optioneel: voer step-response kalibratie opnieuw uit na het opslaan. Doe dit op een zonnige dag voor de beste resultaten.",
+          "data": {
             "_recalibrate": "Step-response kalibratie opnieuw uitvoeren na opslaan"
           }
         }
+      },
+      "error": {
+        "setpoint_entity_mismatch": "De gekozen setpoint-entiteit past niet bij het geselecteerde uitvoertype."
       }
     },
     "battery": {
@@ -84,27 +106,34 @@
           "description": "Configureer een batterijopslagsysteem voor de controller om te bewaken en optioneel aan te sturen.",
           "data": {
             "name": "Batterijnaam (bijv. Thuisbatterij)",
-            "battery_sensor": "Batterijvermogensensor (positief = laden)",
+            "battery_sensor": "Batterijvermogensensor (negatief = laden, positief = ontladen)",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
-            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
-            "battery_control_enabled": "Laat Zero Grid Controller het batterijsetpoint aansturen",
-            "battery_setpoint_entity": "Batterij setpoint entiteit",
-            "response_speed": "Besturingsresponssnelheid"
+            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)"
           }
         },
         "reconfigure": {
           "title": "Batterij configureren",
-          "description": "Pas de instellingen van deze batterij aan.",
+          "description": "Pas de basisinstellingen van deze batterij aan.",
           "data": {
             "name": "Batterijnaam",
-            "battery_sensor": "Batterijvermogensensor (positief = laden)",
+            "battery_sensor": "Batterijvermogensensor (negatief = laden, positief = ontladen)",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
-            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
+            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)"
+          }
+        },
+        "battery_control": {
+          "title": "Batterijbesturingsinstellingen",
+          "description": "Configureer of Zero Grid Controller het setpoint van deze batterij actief mag aansturen.",
+          "data": {
             "battery_control_enabled": "Laat Zero Grid Controller het batterijsetpoint aansturen",
-            "battery_setpoint_entity": "Batterij setpoint entiteit",
-            "response_speed": "Besturingsresponssnelheid"
+            "battery_setpoint_entity": "Batterij setpoint-entiteit (verplicht als besturing is ingeschakeld)",
+            "response_speed": "Besturingsresponssnelheid",
+            "settling_time_s": "Settlingtijd (s) — hoe lang duurt het voordat de batterij het gevraagde vermogen bereikt"
           }
         }
+      },
+      "error": {
+        "setpoint_required": "Een setpoint-entiteit is vereist als batterijbesturing is ingeschakeld."
       }
     }
   },
@@ -112,10 +141,12 @@
     "step": {
       "init": {
         "title": "Zero Grid Controller opties",
+        "description": "Schakel expertmodus in om PID- en estimatorparameters handmatig af te stellen. De online auto-tuner wordt uitgeschakeld wanneer expertmodus actief is.\n\nVoor geavanceerde functies zoals SoC-bewuste sturing, fasebalancering of tijdgebonden optimalisatie, gebruik de [Battery Controller](https://github.com/bvweerd/battery-controller)-integratie en koppel deze via de optimalisatormodus-entiteit hierboven.",
         "data": {
-          "expert_mode": "Expertmodus inschakelen"
-        },
-        "description": "Schakel expertmodus in om PID- en estimatorparameters handmatig af te stellen. De online auto-tuner wordt uitgeschakeld wanneer expertmodus actief is."
+          "expert_mode": "Expertmodus inschakelen",
+          "sensor_stale_s": "Versheidsvenster sensordata (s) — data ouder dan dit wordt als onbeschikbaar beschouwd",
+          "calib_max_grid_w": "Kalibratie-veiligheidslimiet (W) — breek kalibratie af als |gridvermogen| dit overschrijdt"
+        }
       }
     }
   },

@@ -27,9 +27,12 @@ def _make_zgc_result() -> ZGCResult:
         pid_i_w=8.0,
         pid_d_w=2.0,
         mode="active",
+        status="active",
         battery_clipping=False,
         learning_status="Learning...",
         setpoints={"PV West": 80.0},
+        battery_setpoints={"Battery": 0.0},
+        battery_unresponsive={"Battery": False},
         array_clipping={"PV West": False},
         array_gain_k={"PV West": None},
         array_calibration={"PV West": "estimated"},
@@ -43,6 +46,8 @@ def _make_coordinator_mock(with_data: bool = True) -> MagicMock:
     coordinator.last_update_success_time = None
     coordinator.update_interval = MagicMock()
     coordinator.update_interval.total_seconds.return_value = 5.0
+    coordinator.controller_enabled = True
+    coordinator.safe_state_applied = False
 
     # PID
     pid = MagicMock()
@@ -66,10 +71,10 @@ def _make_coordinator_mock(with_data: bool = True) -> MagicMock:
     coordinator.arrays = [array]
 
     # Override setpoints
-    coordinator._override_setpoints = {"PV West": (40.0, time.monotonic() + 300.0)}
+    coordinator.override_setpoints = {"PV West": (40.0, time.monotonic() + 300.0)}
 
     # Settling until
-    coordinator._settling_until = {"PV West": time.monotonic() + 10.0}
+    coordinator.settling_until = {"PV West": time.monotonic() + 10.0}
 
     # Response factor
     coordinator._response_factor = 1.0
@@ -150,6 +155,9 @@ async def test_diagnostics_with_data() -> None:
     # Check coordinator data is present
     assert result["coordinator"]["grid_raw_w"] == 150.0
     assert result["coordinator"]["mode"] == "active"
+    assert result["coordinator"]["status"] == "active"
+    assert result["coordinator"]["battery_setpoints"]["Battery"] == 0.0
+    assert result["coordinator"]["battery_unresponsive"]["Battery"] is False
 
     # Check PID data
     assert result["pid"]["kp"] == 0.5
@@ -317,6 +325,8 @@ async def test_diagnostics_coordinator_timing() -> None:
         result["coordinator_timing"]["last_update_success_time"]
         == "2026-04-06T12:00:00"
     )
+    assert result["coordinator_timing"]["controller_enabled"] is True
+    assert result["coordinator_timing"]["safe_state_applied"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +369,43 @@ async def test_diagnostics_with_entities() -> None:
 
     assert len(result["entities"]) == 1
     assert result["entities"][0]["entity_id"] == "sensor.zgc_grid_power"
+
+
+async def test_diagnostics_redacts_subentry_data() -> None:
+    """Diagnostics redacts sensitive fields inside subentries."""
+    coordinator = _make_coordinator_mock(with_data=False)
+    entry = _make_entry_mock(coordinator)
+    subentry = MagicMock()
+    subentry.title = "Battery"
+    subentry.subentry_type = "battery"
+    subentry.data = {
+        "battery_sensor": "sensor.secret_battery",
+        "battery_setpoint_entity": "number.secret_target",
+    }
+    entry.subentries = {"sub1": subentry}
+
+    hass = MagicMock()
+    issue_registry = MagicMock()
+    issue_registry.issues.values.return_value = []
+    ent_reg = MagicMock()
+    ent_reg_module = MagicMock()
+    ent_reg_module.async_get.return_value = ent_reg
+    ent_reg_module.async_entries_for_config_entry.return_value = []
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(
+            "custom_components.zero_grid_controller.diagnostics.ir_async_get",
+            lambda _: issue_registry,
+        )
+        mp.setattr(
+            "custom_components.zero_grid_controller.diagnostics.er",
+            ent_reg_module,
+        )
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+    subentry_data = result["config_entry"]["subentries"]["Battery"]["data"]
+    assert subentry_data["battery_sensor"] == "**REDACTED**"
+    assert subentry_data["battery_setpoint_entity"] == "**REDACTED**"
 
 
 # ---------------------------------------------------------------------------

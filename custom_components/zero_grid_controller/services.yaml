@@ -22,22 +22,6 @@ recalibrate:
       selector:
         text:
 
-set_response_speed:
-  name: Set response speed
-  description: Set the controller response speed (alternative to the options UI slider).
-  fields:
-    speed:
-      name: Speed
-      description: "Response speed preset: cautious, normal, or fast."
-      required: true
-      example: "normal"
-      selector:
-        select:
-          options:
-            - "cautious"
-            - "normal"
-            - "fast"
-
 override_setpoint:
   name: Override setpoint
   description: >

@@ -9,9 +9,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .calibrator import ArrayCalibrator
 from .coordinator import ZeroGridCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ PARALLEL_UPDATES = 0
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up button entities."""
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
@@ -30,7 +29,7 @@ async def async_setup_entry(
 
     entities: list[ButtonEntity] = [
         ZGCResetPIDButton(coordinator, entry, main_device),
-        ZGCRecalibrateButton(hass, coordinator, entry, main_device),
+        ZGCRecalibrateButton(coordinator, entry, main_device),
     ]
 
     async_add_entities(entities)
@@ -69,12 +68,10 @@ class ZGCRecalibrateButton(ButtonEntity):
 
     def __init__(
         self,
-        hass: HomeAssistant,
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
     ) -> None:
-        self._hass = hass
         self._coordinator = coordinator
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_recalibrate"
@@ -88,14 +85,7 @@ class ZGCRecalibrateButton(ButtonEntity):
             _LOGGER.warning("No arrays to calibrate")
             return
 
-        calibrator = ArrayCalibrator()
-        self._hass.async_create_task(
-            calibrator.run(
-                self._hass,
-                arrays,
-                self._coordinator.read_grid_w,
-                lambda msg, pct: _LOGGER.info(
-                    "Calibration: %s (%.0f%%)", msg, pct * 100
-                ),
-            )
+        self._coordinator.async_start_calibration(
+            arrays,
+            lambda msg, pct: _LOGGER.info("Calibration: %s (%.0f%%)", msg, pct * 100),
         )

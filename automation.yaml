@@ -1,0 +1,185 @@
+alias: PV reductie (echt)
+description: >
+  Proportionele verdeling met gescheiden deadbands (zolder 36W, zuid 10W) +
+  availability-check + prieel 60s debounce
+triggers:
+  - trigger: time_pattern
+    seconds: /30
+conditions: []
+actions:
+  - variables:
+      W_PER_PCT_ZOLDER: 36
+      W_PER_PCT_ZUID: 10
+      THR_ZOLDER: 36
+      THR_ZUID: 10
+      AVAIL_MARGIN_ZOLDER: "{{ W_PER_PCT_ZOLDER }}"
+      AVAIL_MARGIN_ZUID: "{{ W_PER_PCT_ZUID }}"
+      pv_zolder: "{{ states('sensor.ral1ch8035_grid_power') | float(0) }}"
+      pv_zuid: "{{ states('sensor.qnb2827044_grid_power') | float(0) }}"
+      pv_prieel: "{{ states('sensor.prieeltje_solar_pv_watt') | float(0) }}"
+      saldo: "{{ states('sensor.elektriciteit_energieverbruik_totaal') | float(0) }}"
+      sp_zolder_cur: "{{ states('input_number.omvormer_zolder_reductie') | float(0) }}"
+      sp_zuid_cur: "{{ states('input_number.omvormer_zuid_reductie')   | float(0) }}"
+      power_zolder_cur: "{{ sp_zolder_cur * W_PER_PCT_ZOLDER }}"
+      power_zuid_cur: "{{ sp_zuid_cur   * W_PER_PCT_ZUID }}"
+      up_headroom_w_zolder: "{{ (100 - sp_zolder_cur) * W_PER_PCT_ZOLDER }}"
+      up_headroom_w_zuid: "{{ (100 - sp_zuid_cur)   * W_PER_PCT_ZUID }}"
+      down_headroom_w_zolder: "{{ sp_zolder_cur * W_PER_PCT_ZOLDER }}"
+      down_headroom_w_zuid: "{{ sp_zuid_cur   * W_PER_PCT_ZUID }}"
+      can_step_up_zolder: "{{ pv_zolder >= (power_zolder_cur - (AVAIL_MARGIN_ZOLDER | float(0))) }}"
+      can_step_up_zuid: "{{ pv_zuid   >= (power_zuid_cur   - (AVAIL_MARGIN_ZUID   | float(0))) }}"
+      can_step_down_zolder: "True"
+      can_step_down_zuid: "True"
+      need_w_raw: |-
+        {% if saldo > THR_ZUID %}
+          {{ saldo }}
+        {% elif saldo < -THR_ZUID %}
+          {{ saldo }}
+        {% else %}
+          0
+        {% endif %}
+      eff_up_w_zolder: |-
+        {% if saldo > THR_ZOLDER and (can_step_up_zolder | bool) %}
+          {{ up_headroom_w_zolder }}
+        {% else %}
+          0
+        {% endif %}
+      eff_up_w_zuid: |-
+        {% if saldo > THR_ZUID and (can_step_up_zuid | bool) %}
+          {{ up_headroom_w_zuid }}
+        {% else %}
+          0
+        {% endif %}
+      eff_down_w_zolder: |-
+        {% if saldo < -THR_ZOLDER and (can_step_down_zolder | bool) %}
+          {{ down_headroom_w_zolder }}
+        {% else %}
+          0
+        {% endif %}
+      eff_down_w_zuid: |-
+        {% if saldo < -THR_ZUID and (can_step_down_zuid | bool) %}
+          {{ down_headroom_w_zuid }}
+        {% else %}
+          0
+        {% endif %}
+      need_w_capped: |-
+        {% if need_w_raw > 0 %}
+          {% set total_up = (eff_up_w_zolder | float(0)) + (eff_up_w_zuid | float(0)) %}
+          {{ [need_w_raw, total_up] | min }}
+        {% elif need_w_raw < 0 %}
+          {% set total_down = (eff_down_w_zolder | float(0)) + (eff_down_w_zuid | float(0)) %}
+          {{ [need_w_raw, -total_down] | max }}
+        {% else %}
+          0
+        {% endif %}
+      weight_zolder: |-
+        {% if need_w_capped > 0 %}
+          {% set total = (eff_up_w_zolder | float(0)) + (eff_up_w_zuid | float(0)) %}
+          {% if total > 0 %}{{ (eff_up_w_zolder | float(0)) / total }}{% else %}0{% endif %}
+        {% elif need_w_capped < 0 %}
+          {% set total = (eff_down_w_zolder | float(0)) + (eff_down_w_zuid | float(0)) %}
+          {% if total > 0 %}{{ (eff_down_w_zolder | float(0)) / total }}{% else %}0{% endif %}
+        {% else %}
+          0.5
+        {% endif %}
+      weight_zuid: "{{ 1 - (weight_zolder | float(0)) }}"
+      dW_zolder: "{{ (need_w_capped | float(0)) * (weight_zolder | float(0)) }}"
+      dW_zuid: "{{ (need_w_capped | float(0)) * (weight_zuid   | float(0)) }}"
+      dPct_zolder_raw: "{{ (dW_zolder / W_PER_PCT_ZOLDER) | float(0) }}"
+      dPct_zuid_raw: "{{ (dW_zuid   / W_PER_PCT_ZUID)   | float(0) }}"
+      dPct_zolder: |-
+        {% if dPct_zolder_raw > 0 %}
+          {{ [dPct_zolder_raw, (100 - sp_zolder_cur)] | min | round(0,'floor') | int(0) }}
+        {% elif dPct_zolder_raw < 0 %}
+          {{ [dPct_zolder_raw|abs, sp_zolder_cur] | min | round(0,'floor') | int(0) * -1 }}
+        {% else %}0{% endif %}
+      dPct_zuid: |-
+        {% if dPct_zuid_raw > 0 %}
+          {{ [dPct_zuid_raw, (100 - sp_zuid_cur)] | min | round(0,'floor') | int(0) }}
+        {% elif dPct_zuid_raw < 0 %}
+          {{ [dPct_zuid_raw|abs, sp_zuid_cur] | min | round(0,'floor') | int(0) * -1 }}
+        {% else %}0{% endif %}
+      sp_zolder_new: >-
+        {% set sp = sp_zolder_cur + (dPct_zolder | int(0)) %} {% if sp > 100
+        %}{% set sp = 100 %}{% endif %} {% if sp < 0 %}{% set sp = 0 %}{% endif
+        %} {{ sp | float(0) }}
+      sp_zuid_new: >-
+        {% set sp = sp_zuid_cur + (dPct_zuid | int(0)) %} {% if sp > 100 %}{%
+        set sp = 100 %}{% endif %} {% if sp < 0 %}{% set sp = 0 %}{% endif %} {{
+        sp | float(0) }}
+      need_up: "{{ need_w_raw > 0 }}"
+      pv_tekort: >-
+        {% set z_thr  = sp_zolder_new * W_PER_PCT_ZOLDER - 2 * W_PER_PCT_ZOLDER
+        %} {% set zu_thr = sp_zuid_new  * W_PER_PCT_ZUID   - 2 *
+        W_PER_PCT_ZUID   %} {{ (need_w_raw > 0) and (pv_zolder < z_thr) and
+        (pv_zuid < zu_thr) }}
+      prieel_on: >-
+        {% set z_ok = sp_zolder_new == 100 %} {% set zu_ok = sp_zuid_new == 100
+        %} {% set need_up = need_w_raw > 0 %} {{ (need_up and z_ok and zu_ok) or
+        (need_up and pv_tekort) }}
+  - parallel:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.omvormer_zolder_reductie
+        data:
+          value: "{{ sp_zolder_new }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.omvormer_zuid_reductie
+        data:
+          value: "{{ sp_zuid_new }}"
+      - action: number.set_value
+        target:
+          entity_id: number.ral1ch8035_power_limit
+        data:
+          value: "{{ (sp_zolder_new | float(0)) | int(0) }}"
+      - action: number.set_value
+        target:
+          entity_id: number.qnb2827044_power_limit
+        data:
+          value: "{{ (sp_zuid_new | float(0)) | int(0) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ prieel_on }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.prieel_wens
+      - conditions:
+          - condition: template
+            value_template: "{{ not prieel_on }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.prieel_wens
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: input_boolean.prieel_wens
+            state: "on"
+            for:
+              minutes: 1
+              seconds: 0
+        sequence:
+          - action: switch.turn_on
+            target:
+              entity_id: switch.zonnepanelen_prieeltje_schakelaar
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.omvormer_prieel_reductie
+      - conditions:
+          - condition: state
+            entity_id: input_boolean.prieel_wens
+            state: "off"
+            for:
+              minutes: 1
+              seconds: 0
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: switch.zonnepanelen_prieeltje_schakelaar
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.omvormer_prieel_reductie
+mode: restart

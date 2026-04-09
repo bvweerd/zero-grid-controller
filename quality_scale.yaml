@@ -3,8 +3,8 @@ rules:
   action-setup:
     status: done
     comment: >
-      Four service actions registered in __init__.py: reset_pid, recalibrate,
-      set_response_speed, override_setpoint. Defined in services.yaml.
+      Three service actions registered in __init__.py: reset_pid, recalibrate,
+      and override_setpoint. Defined in services.yaml.
   appropriate-polling:
     status: done
     comment: >
@@ -27,9 +27,9 @@ rules:
   config-flow:
     status: done
     comment: >
-      Wizard-style ConfigFlow with steps: user → battery → mode_guard →
-      mode_mapping → done. PV arrays added via ArraySubEntryFlow (user +
-      reconfigure). OptionsFlow with menu: speed / expert / recalibrate.
+      Wizard-style ConfigFlow with steps: user → mode_guard → mode_mapping → done.
+      PV arrays and batteries are managed via ConfigSubentryFlow add/reconfigure
+      flows. OptionsFlow currently exposes expert mode only.
   dependency-transparency:
     status: done
     comment: >

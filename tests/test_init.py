@@ -262,7 +262,7 @@ async def test_handle_reset_pid_no_runtime_data() -> None:
 
 
 async def test_handle_recalibrate() -> None:
-    """recalibrate service creates a calibration task for matching arrays."""
+    """recalibrate service calls async_start_calibration for matching arrays."""
     hass = _make_mock_hass()
     _register_services(hass)
 
@@ -271,29 +271,21 @@ async def test_handle_recalibrate() -> None:
 
     coordinator = MagicMock()
     coordinator.arrays = [array]
-    coordinator.read_grid_w = MagicMock(return_value=0.0)
+    coordinator.async_start_calibration = MagicMock(return_value=True)
 
     mock_entry = MagicMock()
     mock_entry.runtime_data = MagicMock()
     mock_entry.runtime_data.coordinator = coordinator
 
     hass.config_entries.async_entries.return_value = [mock_entry]
-    hass.async_create_task = MagicMock()
 
     call = MagicMock()
     call.data = {}
 
     handler = hass._captured_handlers[SERVICE_RECALIBRATE]
+    await handler(call)
 
-    with patch(
-        "custom_components.zero_grid_controller.ArrayCalibrator"
-    ) as MockCalibrator:
-        mock_cal = MagicMock()
-        mock_cal.run = AsyncMock()
-        MockCalibrator.return_value = mock_cal
-        await handler(call)
-
-    hass.async_create_task.assert_called_once()
+    coordinator.async_start_calibration.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -313,29 +305,25 @@ async def test_handle_recalibrate_array_name_filter() -> None:
 
     coordinator = MagicMock()
     coordinator.arrays = [array_a, array_b]
-    coordinator.read_grid_w = MagicMock(return_value=0.0)
+    coordinator.async_start_calibration = MagicMock(return_value=True)
 
     mock_entry = MagicMock()
     mock_entry.runtime_data = MagicMock()
     mock_entry.runtime_data.coordinator = coordinator
 
     hass.config_entries.async_entries.return_value = [mock_entry]
-    hass.async_create_task = MagicMock()
 
     call = MagicMock()
     call.data = {"array_name": "PV West"}
 
     handler = hass._captured_handlers[SERVICE_RECALIBRATE]
+    await handler(call)
 
-    with patch(
-        "custom_components.zero_grid_controller.ArrayCalibrator"
-    ) as MockCalibrator:
-        mock_cal = MagicMock()
-        mock_cal.run = AsyncMock()
-        MockCalibrator.return_value = mock_cal
-        await handler(call)
-
-    hass.async_create_task.assert_called_once()
+    # Only PV West matches — async_start_calibration should be called once
+    coordinator.async_start_calibration.assert_called_once()
+    arrays_arg = coordinator.async_start_calibration.call_args.args[0]
+    assert len(arrays_arg) == 1
+    assert arrays_arg[0].name == "PV West"
 
 
 # ---------------------------------------------------------------------------
@@ -352,15 +340,12 @@ async def test_handle_recalibrate_no_runtime_data() -> None:
     mock_entry.runtime_data = None
 
     hass.config_entries.async_entries.return_value = [mock_entry]
-    hass.async_create_task = MagicMock()
 
     call = MagicMock()
     call.data = {}
 
     handler = hass._captured_handlers[SERVICE_RECALIBRATE]
-    await handler(call)
-
-    hass.async_create_task.assert_not_called()
+    await handler(call)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +354,7 @@ async def test_handle_recalibrate_no_runtime_data() -> None:
 
 
 async def test_handle_recalibrate_no_matching_arrays() -> None:
-    """recalibrate does not create task when no arrays match the filter."""
+    """recalibrate does not call async_start_calibration when no arrays match."""
     hass = _make_mock_hass()
     _register_services(hass)
 
@@ -378,13 +363,13 @@ async def test_handle_recalibrate_no_matching_arrays() -> None:
 
     coordinator = MagicMock()
     coordinator.arrays = [array]
+    coordinator.async_start_calibration = MagicMock(return_value=True)
 
     mock_entry = MagicMock()
     mock_entry.runtime_data = MagicMock()
     mock_entry.runtime_data.coordinator = coordinator
 
     hass.config_entries.async_entries.return_value = [mock_entry]
-    hass.async_create_task = MagicMock()
 
     call = MagicMock()
     call.data = {"array_name": "PV East"}  # No match
@@ -392,7 +377,7 @@ async def test_handle_recalibrate_no_matching_arrays() -> None:
     handler = hass._captured_handlers[SERVICE_RECALIBRATE]
     await handler(call)
 
-    hass.async_create_task.assert_not_called()
+    coordinator.async_start_calibration.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -401,12 +386,12 @@ async def test_handle_recalibrate_no_matching_arrays() -> None:
 
 
 async def test_handle_override_setpoint() -> None:
-    """override_setpoint service calls coordinator.override_setpoint."""
+    """override_setpoint service calls coordinator.async_override_setpoint."""
     hass = _make_mock_hass()
     _register_services(hass)
 
     coordinator = MagicMock()
-    coordinator.override_setpoint = MagicMock()
+    coordinator.async_override_setpoint = AsyncMock()
 
     mock_entry = MagicMock()
     mock_entry.runtime_data = MagicMock()
@@ -420,7 +405,7 @@ async def test_handle_override_setpoint() -> None:
     handler = hass._captured_handlers[SERVICE_OVERRIDE_SETPOINT]
     await handler(call)
 
-    coordinator.override_setpoint.assert_called_once_with("PV West", 75.0)
+    coordinator.async_override_setpoint.assert_called_once_with("PV West", 75.0)
 
 
 # ---------------------------------------------------------------------------
@@ -513,3 +498,43 @@ async def test_setup_entry_with_subentries(hass: HomeAssistant) -> None:
     assert result is True
     assert len(entry.runtime_data.array_devices) == 1
     assert len(entry.runtime_data.battery_devices) == 1
+
+
+async def test_setup_entry_refreshes_before_platform_setup(hass: HomeAssistant) -> None:
+    """Coordinator first refresh runs before platform forwarding."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_INVERT_SIGN: False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("sensor.grid_import", "0")
+
+    events: list[str] = []
+
+    async def _mock_forward(*args, **kwargs):
+        events.append("forward")
+
+    async def _mock_refresh(*args, **kwargs):
+        events.append("refresh")
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new=AsyncMock(side_effect=_mock_forward),
+        ),
+        patch(
+            "custom_components.zero_grid_controller.ZeroGridCoordinator.async_config_entry_first_refresh",
+            new=AsyncMock(side_effect=_mock_refresh),
+        ),
+    ):
+        result = await async_setup_entry(hass, entry)
+
+    assert result is True
+    assert events == ["refresh", "forward"]

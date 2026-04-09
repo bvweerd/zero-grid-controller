@@ -35,9 +35,14 @@ from custom_components.zero_grid_controller.calibrator import ArrayCalibrator
 
 
 class _State:
-    def __init__(self, value: str) -> None:
+    _counter: int = 0
+
+    def __init__(self, value: str, unique: bool = False) -> None:
         self.state = value
         self.attributes: dict = {}
+        if unique:
+            _State._counter += 1
+        self.last_changed: int = _State._counter
 
 
 class _SequenceStates:
@@ -60,7 +65,7 @@ class _SequenceStates:
             idx = self._idx.get(entity_id, 0)
             seq = self._seqs[entity_id]
             self._idx[entity_id] = idx + 1
-            return _State(seq[min(idx, len(seq) - 1)])
+            return _State(seq[min(idx, len(seq) - 1)], unique=True)
         if entity_id in self._fixed:
             return _State(self._fixed[entity_id])
         return None
@@ -70,6 +75,8 @@ def _make_hass(states: _SequenceStates) -> MagicMock:
     hass = MagicMock()
     hass.states.get = states.get
     hass.services.async_call = AsyncMock()
+    # Tracking mock for the write_setpoint callback passed to calibrator.run()
+    hass.write_setpoint = AsyncMock()
     return hass
 
 
@@ -86,13 +93,11 @@ class _FakeMonotonic:
 
 
 def _written_setpoints(hass: MagicMock) -> list[float]:
-    """Return all 'value' arguments passed to number.set_value calls."""
+    """Return all values passed to the write_setpoint callback (array, value)."""
     return [
-        call.args[2]["value"]
-        for call in hass.services.async_call.call_args_list
-        if len(call.args) > 2
-        and isinstance(call.args[2], dict)
-        and "value" in call.args[2]
+        call.args[1]
+        for call in hass.write_setpoint.call_args_list
+        if len(call.args) >= 2
     ]
 
 
@@ -200,6 +205,7 @@ async def test_calibration_pv_west_success() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -236,6 +242,7 @@ async def test_calibration_no_sun_fails() -> None:
             hass,
             [_pv_west(pv_sensor=True)],
             _make_read_grid(states, "sensor.grid_power", False),
+            hass.write_setpoint,
             lambda *_: None,
         )
 
@@ -267,6 +274,7 @@ async def test_calibration_no_step_room_returns_defaults() -> None:
             hass,
             [array],
             _make_read_grid(states, "sensor.grid_power", False),
+            hass.write_setpoint,
             lambda *_: None,
         )
 
@@ -306,6 +314,7 @@ async def test_calibration_grid_safety_abort_restores_setpoint() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -347,6 +356,7 @@ async def test_calibration_abort_stops_at_first_array() -> None:
             hass,
             arrays,
             _make_read_grid(states, "sensor.grid_power", False),
+            hass.write_setpoint,
             lambda *_: None,
         )
 
@@ -402,6 +412,7 @@ async def test_calibration_inverted_sign_measures_correctly() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", True),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -435,6 +446,7 @@ async def test_calibration_setpoint_unavailable_returns_default() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -469,6 +481,7 @@ async def test_calibration_baseline_unavailable_returns_default() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -504,6 +517,7 @@ async def test_calibration_grid_none_during_loop() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -538,6 +552,7 @@ async def test_calibration_tiny_response_fails() -> None:
                 hass,
                 [_pv_west()],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -576,6 +591,7 @@ async def test_calibration_multi_array_inter_array_sleep() -> None:
                 hass,
                 arrays,
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -618,6 +634,7 @@ async def test_calibration_wait_stable_pv_sensor_stable() -> None:
                 hass,
                 [_pv_west(pv_sensor=True)],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -660,6 +677,7 @@ async def test_calibration_wait_stable_deadline_expires() -> None:
                 hass,
                 [_pv_west(pv_sensor=True)],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 
@@ -742,12 +760,14 @@ async def test_calibration_read_setpoint_value_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_calibration_write_setpoint_switch_type() -> None:
-    states = _SequenceStates()
-    hass = _make_hass(states)
-    calibrator = ArrayCalibrator()
-
+async def test_actuator_write_setpoint_switch_type() -> None:
+    """ActuatorManager.write_setpoint routes switch arrays to turn_on / turn_off."""
+    from custom_components.zero_grid_controller.actuator_manager import ActuatorManager
     from custom_components.zero_grid_controller.const import OUTPUT_TYPE_SWITCH
+
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock()
+    actuator = ActuatorManager(hass)
 
     switch_array = ArrayConfig(
         name="Load Switch",
@@ -763,9 +783,9 @@ async def test_calibration_write_setpoint_switch_type() -> None:
     )
 
     # Write value > 0 → turn_on
-    await calibrator._write_setpoint(hass, switch_array, 1.0)
+    await actuator.write_setpoint(switch_array, 1.0)
     # Write value == 0 → turn_off
-    await calibrator._write_setpoint(hass, switch_array, 0.0)
+    await actuator.write_setpoint(switch_array, 0.0)
 
     calls = hass.services.async_call.call_args_list
     services = [c.args[1] for c in calls]
@@ -797,6 +817,7 @@ async def test_calibration_wait_stable_no_pv_insufficient_samples() -> None:
             hass,
             [_pv_west()],
             _make_read_grid(states, "sensor.grid_power", False),
+            hass.write_setpoint,
             lambda *_: None,
         )
 
@@ -851,6 +872,7 @@ async def test_calibration_wait_stable_pv_value_error() -> None:
                 hass,
                 [_pv_west(pv_sensor=True)],
                 _make_read_grid(states, "sensor.grid_power", False),
+                hass.write_setpoint,
                 lambda *_: None,
             )
 

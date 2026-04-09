@@ -107,6 +107,10 @@ class PIDController:
         self._ki = ki
         self._kd = kd
 
+    def set_integral(self, value: float) -> None:
+        """Set the integrator state (e.g., to restore across config reload)."""
+        self._integral = value
+
     def set_output_limits(
         self, output_min: float | None, output_max: float | None
     ) -> None:
@@ -133,6 +137,14 @@ class PIDController:
     @property
     def integral(self) -> float:
         return self._integral
+
+    @property
+    def output_min(self) -> float | None:
+        return self._output_min
+
+    @property
+    def output_max(self) -> float | None:
+        return self._output_max
 
     @property
     def components(self) -> dict[str, float]:

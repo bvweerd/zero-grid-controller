@@ -8,12 +8,15 @@
       "pid_i_w": { "default": "mdi:alpha-i-circle-outline" },
       "pid_d_w": { "default": "mdi:alpha-d-circle-outline" },
       "mode": { "default": "mdi:cog-outline" },
-      "battery_clipping": { "default": "mdi:battery-alert" },
+      "status": { "default": "mdi:state-machine" },
       "learning_status": { "default": "mdi:robot-outline" },
       "array_setpoint": { "default": "mdi:solar-power" },
       "array_clipping": { "default": "mdi:solar-power-variant" },
       "array_gain_k": { "default": "mdi:chart-line" },
       "array_calibration": { "default": "mdi:check-decagram-outline" }
+    },
+    "binary_sensor": {
+      "battery_clipping": { "default": "mdi:battery-alert" }
     },
     "number": {
       "kp": { "default": "mdi:alpha-p-box-outline" },
@@ -32,7 +35,6 @@
   "services": {
     "reset_pid": { "service": "mdi:restart" },
     "recalibrate": { "service": "mdi:chart-scatter-plot" },
-    "set_response_speed": { "service": "mdi:speedometer" },
     "override_setpoint": { "service": "mdi:hand-pointing-right" }
   }
 }

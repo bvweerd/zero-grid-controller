@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant
@@ -21,6 +21,8 @@ from .const import (
     CALIB_MAX_TIME_S,
     CALIB_MIN_PV_W,
     CALIB_MIN_W_PER_UNIT,
+    CALIB_NO_PV_SENSOR_NOTE,
+    CALIB_PV_SENSOR_MAX_WAIT_S,
     CALIB_SETTLING_CONFIRM_COUNT,
     CALIB_SETTLING_MAX_S,
     CALIB_SETTLING_MIN_S,
@@ -33,6 +35,7 @@ from .const import (
     CALIBRATION_CONFIDENCE_ESTIMATED,
     DEFAULT_SETTLING_TIME_S,
     DEFAULT_W_PER_UNIT,
+    OUTPUT_TYPE_SWITCH,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,7 +85,10 @@ class ArrayCalibrator:
         hass: HomeAssistant,
         arrays: list[ArrayConfig],
         read_grid: Callable[[], float | None],
+        write_setpoint: Callable[[ArrayConfig, float], Awaitable[None]],
         progress_callback: Callable[[str, float], None],
+        *,
+        calib_max_grid_w: float = CALIB_MAX_GRID_W,
     ) -> dict[str, CalibrationResult]:
         """Run calibration for all arrays and return results keyed by array name."""
         results: dict[str, CalibrationResult] = {}
@@ -102,7 +108,9 @@ class ArrayCalibrator:
                 hass,
                 array,
                 read_grid,
+                write_setpoint,
                 lambda msg, p, bp=base_progress: progress_callback(msg, bp + p / n),  # type: ignore[misc]
+                calib_max_grid_w=calib_max_grid_w,
             )
             results[array.name] = result
             _LOGGER.info(
@@ -130,15 +138,34 @@ class ArrayCalibrator:
         hass: HomeAssistant,
         array: ArrayConfig,
         read_grid: Callable[[], float | None],
+        write_setpoint: Callable[[ArrayConfig, float], Awaitable[None]],
         progress_callback: Callable[[str, float], None],
+        *,
+        calib_max_grid_w: float = CALIB_MAX_GRID_W,
     ) -> CalibrationResult:
-        """Calibrate a single array. Returns a CalibrationResult."""
+        """Calibrate a single array. Returns a CalibrationResult.
+
+        When array.pv_power_entity is configured the step response is measured
+        directly on the PV sensor (low noise, σ ≈ 5 W).  Without it the grid
+        sensor is used (high noise, σ ≈ 30 W), which often prevents settling
+        detection and yields a "failed" result.
+        """
+        if array.output_type == OUTPUT_TYPE_SWITCH:
+            return CalibrationResult(
+                w_per_unit=DEFAULT_W_PER_UNIT,
+                settling_time_s=array.settling_time_s,
+                confidence="failed",
+                notes=f"{array.name}: switch outputs are not numerically calibratable.",
+            )
+
         default = CalibrationResult(
             w_per_unit=DEFAULT_W_PER_UNIT,
             settling_time_s=DEFAULT_SETTLING_TIME_S,
             confidence=CALIBRATION_CONFIDENCE_ESTIMATED,
             notes="Using default values (calibration not run or insufficient solar output).",
         )
+
+        use_pv_sensor = array.pv_power_entity is not None
 
         # --- Step 1: wait for stable conditions ---
         progress_callback("calibration_waiting_sun", 0.0)
@@ -160,11 +187,32 @@ class ArrayCalibrator:
         if original_setpoint is None:
             return default
 
-        # --- Step 3: measure baseline grid_w ---
+        # --- Step 3: measure baseline ---
         progress_callback("calibration_measuring_baseline", 0.1)
-        baseline = await self._measure_grid_avg(
-            read_grid, samples=CALIB_BASELINE_SAMPLES
-        )
+        if use_pv_sensor:
+            assert (
+                array.pv_power_entity is not None
+            )  # guaranteed by use_pv_sensor check
+            baseline = await self._measure_pv_avg(
+                hass,
+                array.pv_power_entity,
+                samples=CALIB_BASELINE_SAMPLES,
+            )
+            # If PV sensor appears to be frozen (slow API), fall back to grid
+            if baseline is None:
+                _LOGGER.warning(
+                    "Array %s: PV sensor did not update during baseline; falling back to grid signal",
+                    array.name,
+                )
+                use_pv_sensor = False
+                baseline = await self._measure_grid_avg(
+                    read_grid, samples=CALIB_BASELINE_SAMPLES
+                )
+        else:
+            baseline = await self._measure_grid_avg(
+                read_grid, samples=CALIB_BASELINE_SAMPLES
+            )
+
         if baseline is None:
             return default
 
@@ -195,7 +243,7 @@ class ArrayCalibrator:
 
         # Apply test step
         progress_callback("calibration_step_sent", 0.3)
-        await self._write_setpoint(hass, array, test_setpoint)
+        await write_setpoint(array, test_setpoint)
         step_size = abs(test_setpoint - original_setpoint)
 
         # --- Step 5: measure response ---
@@ -208,20 +256,28 @@ class ArrayCalibrator:
         while elapsed < CALIB_MAX_TIME_S and not self._abort:
             await asyncio.sleep(1.0)
             elapsed = time.monotonic() - start_t
-            grid_w = read_grid()
-            if grid_w is None:
-                continue
 
-            if abs(grid_w) > CALIB_MAX_GRID_W:
+            # Safety check always uses grid
+            grid_w = read_grid()
+            if grid_w is not None and abs(grid_w) > calib_max_grid_w:
                 _LOGGER.warning(
                     "Grid measurement %.0f W exceeds safety limit; aborting calibration for %s",
                     grid_w,
                     array.name,
                 )
-                await self._write_setpoint(hass, array, original_setpoint)
+                await write_setpoint(array, original_setpoint)
                 return default
 
-            recent.append(grid_w)
+            # Choose measurement signal
+            if use_pv_sensor:
+                signal = self._read_pv_safe(hass, array.pv_power_entity)  # type: ignore[arg-type]
+            else:
+                signal = grid_w
+
+            if signal is None:
+                continue
+
+            recent.append(signal)
             # Only start checking after the inverter settling time has elapsed
             if (
                 elapsed >= array.settling_time_s
@@ -238,7 +294,7 @@ class ArrayCalibrator:
             )
 
         # --- Step 6: restore and compute results ---
-        await self._write_setpoint(hass, array, original_setpoint)
+        await write_setpoint(array, original_setpoint)
 
         if not settled:
             return CalibrationResult(
@@ -262,14 +318,18 @@ class ArrayCalibrator:
             )
 
         progress_callback("calibration_result", 0.95)
+        notes = (
+            f"{array.name}: {w_per_unit:.0f} W/step, "
+            f"{settling_time_s}s response time"
+            f"{' (PV sensor)' if use_pv_sensor else ' (grid sensor — add PV sensor for accuracy)'}."
+        )
+        if not use_pv_sensor:
+            notes += f" {CALIB_NO_PV_SENSOR_NOTE}"
         return CalibrationResult(
             w_per_unit=w_per_unit,
             settling_time_s=settling_time_s,
             confidence="measured",
-            notes=(
-                f"{array.name}: {w_per_unit:.0f} W/step, "
-                f"{settling_time_s}s response time."
-            ),
+            notes=notes,
         )
 
     async def _wait_for_stable(
@@ -339,6 +399,68 @@ class ArrayCalibrator:
             return None
         return sum(readings) / len(readings)
 
+    async def _measure_pv_avg(
+        self,
+        hass: HomeAssistant,
+        entity_id: str,
+        samples: int = 10,
+    ) -> float | None:
+        """Measure average PV power over `samples` distinct sensor updates.
+
+        Handles slow inverter APIs (e.g. SolarEdge 10 s poll) by waiting up to
+        CALIB_PV_SENSOR_MAX_WAIT_S for each new reading instead of counting
+        duplicate stale values.  Returns None if the sensor never updates.
+        """
+        readings: list[float] = []
+        last_changed: object = None
+
+        while len(readings) < samples:
+            state = hass.states.get(entity_id)
+            if state is None or state.state in ("unknown", "unavailable"):
+                await asyncio.sleep(1.0)
+                continue
+
+            if state.last_changed != last_changed:
+                try:
+                    readings.append(float(state.state))
+                    last_changed = state.last_changed
+                except ValueError:
+                    pass
+
+            if len(readings) < samples:
+                # Wait up to CALIB_PV_SENSOR_MAX_WAIT_S for the next update
+                waited = 0.0
+                while waited < CALIB_PV_SENSOR_MAX_WAIT_S:
+                    await asyncio.sleep(1.0)
+                    waited += 1.0
+                    new_state = hass.states.get(entity_id)
+                    if new_state and new_state.last_changed != last_changed:
+                        break
+                else:
+                    # Sensor did not update within the wait window → frozen
+                    _LOGGER.debug(
+                        "PV sensor %s did not update within %d s",
+                        entity_id,
+                        CALIB_PV_SENSOR_MAX_WAIT_S,
+                    )
+                    if not readings:
+                        return None  # never got a single reading
+                    break  # use what we have
+
+        if not readings:
+            return None
+        return sum(readings) / len(readings)
+
+    def _read_pv_safe(self, hass: HomeAssistant, entity_id: str) -> float | None:
+        """Read a PV sensor state synchronously, returning None on any error."""
+        state = hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(state.state)
+        except ValueError:
+            return None
+
     def _read_setpoint(self, hass: HomeAssistant, array: ArrayConfig) -> float | None:
         state = hass.states.get(array.setpoint_entity)
         if state is None or state.state in ("unknown", "unavailable"):
@@ -347,25 +469,3 @@ class ArrayCalibrator:
             return float(state.state)
         except ValueError:
             return None
-
-    async def _write_setpoint(
-        self, hass: HomeAssistant, array: ArrayConfig, value: float
-    ) -> None:
-        """Write a new setpoint to the inverter entity."""
-        from homeassistant.const import ATTR_ENTITY_ID
-
-        from .const import OUTPUT_TYPE_SWITCH
-
-        if array.output_type == OUTPUT_TYPE_SWITCH:
-            service = "turn_on" if value > 0 else "turn_off"
-            await hass.services.async_call(
-                "switch",
-                service,
-                {ATTR_ENTITY_ID: array.setpoint_entity},
-            )
-        else:
-            await hass.services.async_call(
-                "number",
-                "set_value",
-                {ATTR_ENTITY_ID: array.setpoint_entity, "value": value},
-            )

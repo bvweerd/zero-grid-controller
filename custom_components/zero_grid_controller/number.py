@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+from inspect import isawaitable
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
     ARRAY_SUBENTRY_TYPE,
@@ -65,21 +66,23 @@ PARALLEL_UPDATES = 0
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up number entities (expert mode parameters)."""
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
     array_devices: dict[str, DeviceInfo] = entry.runtime_data.array_devices
 
-    entities: list[NumberEntity] = [
-        ZGCKpNumber(coordinator, entry, main_device),
-        ZGCKiNumber(coordinator, entry, main_device),
-        ZGCKdNumber(coordinator, entry, main_device),
-        ZGCEwmAlphaNumber(coordinator, entry, main_device),
-        ZGCDeadbandNumber(coordinator, entry, main_device),
-        ZGCOutputMaxNumber(coordinator, entry, main_device),
-    ]
+    async_add_entities(
+        [
+            ZGCKpNumber(coordinator, entry, main_device),
+            ZGCKiNumber(coordinator, entry, main_device),
+            ZGCKdNumber(coordinator, entry, main_device),
+            ZGCEwmAlphaNumber(coordinator, entry, main_device),
+            ZGCDeadbandNumber(coordinator, entry, main_device),
+            ZGCOutputMaxNumber(coordinator, entry, main_device),
+        ]
+    )
 
     for subentry in entry.subentries.values():
         if subentry.subentry_type != ARRAY_SUBENTRY_TYPE:
@@ -88,12 +91,17 @@ async def async_setup_entry(
         device = array_devices.get(subentry.subentry_id)
         if device is None:
             continue
-        entities += [
-            ZGCArraySettlingTimeNumber(coordinator, entry, device, array_name),
-            ZGCArrayWPerUnitNumber(coordinator, entry, device, array_name),
-        ]
-
-    async_add_entities(entities)
+        async_add_entities(
+            [
+                ZGCArraySettlingTimeNumber(
+                    coordinator, entry, device, subentry.subentry_id, array_name
+                ),
+                ZGCArrayWPerUnitNumber(
+                    coordinator, entry, device, subentry.subentry_id, array_name
+                ),
+            ],
+            config_subentry_id=subentry.subentry_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -113,16 +121,17 @@ class ZGCNumberBase(NumberEntity):
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
-        key: str,
+        unique_key: str,
+        config_key: str,
         default: float,
     ) -> None:
         self._coordinator = coordinator
         self._entry = entry
-        self._key = key
+        self._config_key = config_key
         self._default = default
-        self._attr_unique_id = f"{entry.entry_id}_{key}"
+        self._attr_unique_id = f"{entry.entry_id}_{unique_key}"
         self._attr_device_info = device
-        self._attr_translation_key = key
+        self._attr_translation_key = config_key
 
     @property
     def entity_registry_enabled_default(self) -> bool:
@@ -133,15 +142,17 @@ class ZGCNumberBase(NumberEntity):
     def native_value(self) -> float:
         return float(
             self._entry.options.get(
-                self._key, self._entry.data.get(self._key, self._default)
+                self._config_key,
+                self._entry.data.get(self._config_key, self._default),
             )
         )
 
     async def async_set_native_value(self, value: float) -> None:
         """Persist the new value and notify the coordinator."""
+        self._coordinator._mark_internal_update()
         self.hass.config_entries.async_update_entry(
             self._entry,
-            options={**self._entry.options, self._key: value},
+            options={**self._entry.options, self._config_key: value},
         )
         await self._on_value_changed(value)
         self.async_write_ha_state()
@@ -163,7 +174,7 @@ class ZGCKpNumber(ZGCNumberBase):
     def __init__(
         self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
     ) -> None:
-        super().__init__(coordinator, entry, device, CONF_KP, DEFAULT_KP)
+        super().__init__(coordinator, entry, device, CONF_KP, CONF_KP, DEFAULT_KP)
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.pid.set_gains(
@@ -179,7 +190,7 @@ class ZGCKiNumber(ZGCNumberBase):
     def __init__(
         self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
     ) -> None:
-        super().__init__(coordinator, entry, device, CONF_KI, DEFAULT_KI)
+        super().__init__(coordinator, entry, device, CONF_KI, CONF_KI, DEFAULT_KI)
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.pid.set_gains(
@@ -195,7 +206,7 @@ class ZGCKdNumber(ZGCNumberBase):
     def __init__(
         self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
     ) -> None:
-        super().__init__(coordinator, entry, device, CONF_KD, DEFAULT_KD)
+        super().__init__(coordinator, entry, device, CONF_KD, CONF_KD, DEFAULT_KD)
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.pid.set_gains(
@@ -211,7 +222,14 @@ class ZGCEwmAlphaNumber(ZGCNumberBase):
     def __init__(
         self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
     ) -> None:
-        super().__init__(coordinator, entry, device, CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA)
+        super().__init__(
+            coordinator,
+            entry,
+            device,
+            CONF_EWM_ALPHA,
+            CONF_EWM_ALPHA,
+            DEFAULT_EWM_ALPHA,
+        )
 
     async def _on_value_changed(self, value: float) -> None:
         self._coordinator.set_ewm_alpha(value)
@@ -226,7 +244,12 @@ class ZGCDeadbandNumber(ZGCNumberBase):
         self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
     ) -> None:
         super().__init__(
-            coordinator, entry, device, CONF_DEADBAND_W, DEFAULT_DEADBAND_W
+            coordinator,
+            entry,
+            device,
+            CONF_DEADBAND_W,
+            CONF_DEADBAND_W,
+            DEFAULT_DEADBAND_W,
         )
 
     async def _on_value_changed(self, value: float) -> None:
@@ -242,7 +265,12 @@ class ZGCOutputMaxNumber(ZGCNumberBase):
         self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
     ) -> None:
         super().__init__(
-            coordinator, entry, device, CONF_OUTPUT_MAX_W, DEFAULT_OUTPUT_MAX_W
+            coordinator,
+            entry,
+            device,
+            CONF_OUTPUT_MAX_W,
+            CONF_OUTPUT_MAX_W,
+            DEFAULT_OUTPUT_MAX_W,
         )
 
     async def _on_value_changed(self, value: float) -> None:
@@ -262,13 +290,40 @@ class ZGCArrayNumberBase(ZGCNumberBase):
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
-        key: str,
+        subentry_id: str,
+        config_key: str,
         default: float,
         array_name: str,
     ) -> None:
-        super().__init__(coordinator, entry, device, f"{array_name}_{key}", default)
+        super().__init__(
+            coordinator,
+            entry,
+            device,
+            f"{subentry_id}_{config_key}",
+            config_key,
+            default,
+        )
         self._array_name = array_name
-        self._attr_translation_key = key
+
+    @property
+    def native_value(self) -> float:
+        subentry = self._coordinator.get_array_subentry(self._array_name)
+        if subentry is not None and self._config_key in subentry.data:
+            return float(subentry.data[self._config_key])
+        array = self._coordinator.get_array(self._array_name)
+        if array is not None and hasattr(array, self._config_key):
+            return float(getattr(array, self._config_key))
+        return float(self._default)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Persist the per-array value to the matching subentry."""
+        result = self._coordinator.async_update_array_config(
+            self._array_name, {self._config_key: value}
+        )
+        if isawaitable(result):
+            await result
+        await self._on_value_changed(value)
+        self.async_write_ha_state()
 
 
 class ZGCArraySettlingTimeNumber(ZGCArrayNumberBase):
@@ -281,12 +336,14 @@ class ZGCArraySettlingTimeNumber(ZGCArrayNumberBase):
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
+        subentry_id: str,
         array_name: str,
     ) -> None:
         super().__init__(
             coordinator,
             entry,
             device,
+            subentry_id,
             CONF_SETTLING_TIME_S,
             float(DEFAULT_SETTLING_TIME_S),
             array_name,
@@ -308,10 +365,17 @@ class ZGCArrayWPerUnitNumber(ZGCArrayNumberBase):
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
+        subentry_id: str,
         array_name: str,
     ) -> None:
         super().__init__(
-            coordinator, entry, device, CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT, array_name
+            coordinator,
+            entry,
+            device,
+            subentry_id,
+            CONF_W_PER_UNIT,
+            DEFAULT_W_PER_UNIT,
+            array_name,
         )
 
     async def _on_value_changed(self, value: float) -> None:
