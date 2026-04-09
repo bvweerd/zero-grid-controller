@@ -24,7 +24,9 @@ async def async_setup_entry(
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
 
-    async_add_entities([ZGCBatteryClippingBinarySensor(coordinator, entry, main_device)])
+    async_add_entities(
+        [ZGCBatteryClippingBinarySensor(coordinator, entry, main_device)]
+    )
 
 
 class ZGCBatteryClippingBinarySensor(

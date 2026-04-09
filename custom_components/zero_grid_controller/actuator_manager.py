@@ -11,11 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from .array import ArrayConfig
 from .battery import BatteryConfig
-from .const import (
-    BATTERY_WRITE_THRESHOLD_W,
-    MODE_PASSIVE,
-    OUTPUT_TYPE_SWITCH,
-)
+from .const import MODE_PASSIVE, OUTPUT_TYPE_SWITCH
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,7 +103,7 @@ class ActuatorManager:
             current_val = current_battery_setpoints.get(battery.name)
             if (
                 current_val is not None
-                and abs(new_val - current_val) < BATTERY_WRITE_THRESHOLD_W
+                and abs(new_val - current_val) < battery.write_threshold_w
             ):
                 continue
 
@@ -198,7 +194,9 @@ class ActuatorManager:
                 continue
 
             current = current_setpoints.get(array.name, array.setpoint_max)
-            new_sp = clamp_func(current - delta_unit, array.setpoint_min, array.setpoint_max)
+            new_sp = clamp_func(
+                current - delta_unit, array.setpoint_min, array.setpoint_max
+            )
             actual_delta = new_sp - current
             if actual_delta == 0:
                 continue

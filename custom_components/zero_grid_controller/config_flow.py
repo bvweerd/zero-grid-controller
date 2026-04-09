@@ -8,21 +8,61 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult, SubentryFlowResult
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import selector
 
 from .const import (
+    ARRAY_CLIPPING_THRESHOLD,
     ARRAY_SUBENTRY_TYPE,
+    BATTERY_CLIPPING_THRESHOLD,
+    BATTERY_HARD_RESET_RATIO,
+    BATTERY_RECOVERY_BLEND,
+    BATTERY_RESPONSE_EWM_ALPHA,
     BATTERY_SUBENTRY_TYPE,
+    BATTERY_UNRESPONSIVE_CYCLES,
+    BATTERY_UNRESPONSIVE_THRESHOLD_W,
+    BATTERY_VERIFICATION_MIN_W,
+    BATTERY_WRITE_THRESHOLD_W,
+    CALIB_BASELINE_SAMPLES,
+    CALIB_GRID_VARIANCE_FACTOR,
+    CALIB_INTER_ARRAY_SLEEP_S,
+    CALIB_MIN_PV_W,
+    CALIB_PV_SENSOR_MAX_WAIT_S,
+    CALIB_SETTLING_CONFIRM_COUNT,
+    CALIB_SETTLING_THRESHOLD_W,
+    CALIB_STABLE_VARIANCE_PCT,
+    CALIB_STABLE_WINDOW_S,
     CALIBRATION_CONFIDENCE_ESTIMATED,
+    CLOUD_SHADOW_MIN_GAP_W,
+    CLOUD_SHADOW_PV_RATIO,
+    CONF_ARRAY_CLIPPING_THRESHOLD,
     CONF_ARRAY_NAME,
+    CONF_BATTERY_CLIPPING_THRESHOLD,
     CONF_BATTERY_CONTROL_ENABLED,
+    CONF_BATTERY_HARD_RESET_RATIO,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
+    CONF_BATTERY_RECOVERY_BLEND,
+    CONF_BATTERY_RESPONSE_EWM_ALPHA,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_BATTERY_UNRESPONSIVE_CYCLES,
+    CONF_BATTERY_UNRESPONSIVE_THRESHOLD_W,
+    CONF_BATTERY_VERIFICATION_MIN_W,
+    CONF_BATTERY_WRITE_THRESHOLD_W,
+    CONF_CALIB_BASELINE_SAMPLES,
+    CONF_CALIB_GRID_VARIANCE_FACTOR,
+    CONF_CALIB_INTER_ARRAY_SLEEP_S,
     CONF_CALIB_MAX_GRID_W,
+    CONF_CALIB_MIN_PV_W,
+    CONF_CALIB_PV_SENSOR_MAX_WAIT_S,
+    CONF_CALIB_SETTLING_CONFIRM_COUNT,
+    CONF_CALIB_SETTLING_THRESHOLD_W,
+    CONF_CALIB_STABLE_VARIANCE_PCT,
+    CONF_CALIB_STABLE_WINDOW_S,
     CONF_CALIBRATION_CONFIDENCE,
+    CONF_CLOUD_SHADOW_MIN_GAP_W,
+    CONF_CLOUD_SHADOW_PV_RATIO,
     CONF_EXPERT_MODE,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
@@ -243,6 +283,51 @@ def _battery_control_schema(defaults: dict[str, Any] | None = None) -> vol.Schem
                     }
                 }
             ),
+            vol.Optional(
+                CONF_BATTERY_WRITE_THRESHOLD_W,
+                default=d.get(
+                    CONF_BATTERY_WRITE_THRESHOLD_W, BATTERY_WRITE_THRESHOLD_W
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=5000)),
+            vol.Optional(
+                CONF_BATTERY_VERIFICATION_MIN_W,
+                default=d.get(
+                    CONF_BATTERY_VERIFICATION_MIN_W, BATTERY_VERIFICATION_MIN_W
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=5000)),
+            vol.Optional(
+                CONF_BATTERY_UNRESPONSIVE_THRESHOLD_W,
+                default=d.get(
+                    CONF_BATTERY_UNRESPONSIVE_THRESHOLD_W,
+                    BATTERY_UNRESPONSIVE_THRESHOLD_W,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=10000)),
+            vol.Optional(
+                CONF_BATTERY_UNRESPONSIVE_CYCLES,
+                default=d.get(
+                    CONF_BATTERY_UNRESPONSIVE_CYCLES, BATTERY_UNRESPONSIVE_CYCLES
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
+            vol.Optional(
+                CONF_BATTERY_RESPONSE_EWM_ALPHA,
+                default=d.get(
+                    CONF_BATTERY_RESPONSE_EWM_ALPHA, BATTERY_RESPONSE_EWM_ALPHA
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=1.0)),
+            vol.Optional(
+                CONF_BATTERY_HARD_RESET_RATIO,
+                default=d.get(CONF_BATTERY_HARD_RESET_RATIO, BATTERY_HARD_RESET_RATIO),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_BATTERY_RECOVERY_BLEND,
+                default=d.get(CONF_BATTERY_RECOVERY_BLEND, BATTERY_RECOVERY_BLEND),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_BATTERY_CLIPPING_THRESHOLD,
+                default=d.get(
+                    CONF_BATTERY_CLIPPING_THRESHOLD, BATTERY_CLIPPING_THRESHOLD
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
         }
     )
 
@@ -263,6 +348,33 @@ def _build_battery_data(draft: dict[str, Any]) -> dict[str, Any]:
         CONF_RESPONSE_FACTOR: RESPONSE_FACTORS.get(speed, DEFAULT_RESPONSE_FACTOR),
         CONF_SETTLING_TIME_S: int(
             draft.get(CONF_SETTLING_TIME_S, DEFAULT_BATTERY_SETTLING_TIME_S)
+        ),
+        CONF_BATTERY_WRITE_THRESHOLD_W: float(
+            draft.get(CONF_BATTERY_WRITE_THRESHOLD_W, BATTERY_WRITE_THRESHOLD_W)
+        ),
+        CONF_BATTERY_VERIFICATION_MIN_W: float(
+            draft.get(CONF_BATTERY_VERIFICATION_MIN_W, BATTERY_VERIFICATION_MIN_W)
+        ),
+        CONF_BATTERY_UNRESPONSIVE_THRESHOLD_W: float(
+            draft.get(
+                CONF_BATTERY_UNRESPONSIVE_THRESHOLD_W,
+                BATTERY_UNRESPONSIVE_THRESHOLD_W,
+            )
+        ),
+        CONF_BATTERY_UNRESPONSIVE_CYCLES: int(
+            draft.get(CONF_BATTERY_UNRESPONSIVE_CYCLES, BATTERY_UNRESPONSIVE_CYCLES)
+        ),
+        CONF_BATTERY_RESPONSE_EWM_ALPHA: float(
+            draft.get(CONF_BATTERY_RESPONSE_EWM_ALPHA, BATTERY_RESPONSE_EWM_ALPHA)
+        ),
+        CONF_BATTERY_HARD_RESET_RATIO: float(
+            draft.get(CONF_BATTERY_HARD_RESET_RATIO, BATTERY_HARD_RESET_RATIO)
+        ),
+        CONF_BATTERY_RECOVERY_BLEND: float(
+            draft.get(CONF_BATTERY_RECOVERY_BLEND, BATTERY_RECOVERY_BLEND)
+        ),
+        CONF_BATTERY_CLIPPING_THRESHOLD: float(
+            draft.get(CONF_BATTERY_CLIPPING_THRESHOLD, BATTERY_CLIPPING_THRESHOLD)
         ),
     }
     if name := draft.get(CONF_NAME, "").strip():
@@ -536,6 +648,14 @@ def _array_setpoint_range_schema(defaults: dict[str, Any] | None = None) -> vol.
                     }
                 }
             ),
+            vol.Optional(
+                CONF_CLOUD_SHADOW_PV_RATIO,
+                default=d.get(CONF_CLOUD_SHADOW_PV_RATIO, CLOUD_SHADOW_PV_RATIO),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_CLOUD_SHADOW_MIN_GAP_W,
+                default=d.get(CONF_CLOUD_SHADOW_MIN_GAP_W, CLOUD_SHADOW_MIN_GAP_W),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=5000)),
         }
     )
 
@@ -620,7 +740,7 @@ def _validate_array_switch_params(user_input: dict[str, Any]) -> dict[str, str]:
     return errors
 
 
-def _extract_mode_guard_states(hass, entity_id: str) -> list[str]:
+def _extract_mode_guard_states(hass: HomeAssistant, entity_id: str) -> list[str]:
     """Return usable mode-guard states for the selected entity."""
     state = hass.states.get(entity_id)
     if state is None:
@@ -657,6 +777,12 @@ def _build_array_data(draft: dict[str, Any]) -> dict[str, Any]:
         ),
         CONF_RESPONSE_FACTOR: RESPONSE_FACTORS.get(
             response_speed, DEFAULT_RESPONSE_FACTOR
+        ),
+        CONF_CLOUD_SHADOW_PV_RATIO: float(
+            draft.get(CONF_CLOUD_SHADOW_PV_RATIO, CLOUD_SHADOW_PV_RATIO)
+        ),
+        CONF_CLOUD_SHADOW_MIN_GAP_W: float(
+            draft.get(CONF_CLOUD_SHADOW_MIN_GAP_W, CLOUD_SHADOW_MIN_GAP_W)
         ),
         CONF_SWITCH_ON_THRESHOLD_W: float(
             draft.get(CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W)
@@ -782,9 +908,9 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if state_val not in user_input
             }
             if errors:
-                schema_dict: dict[Any, Any] = {}
+                error_schema_dict: dict[Any, Any] = {}
                 for state_val in self._mode_guard_states:
-                    schema_dict[
+                    error_schema_dict[
                         vol.Required(
                             state_val,
                             default=user_input.get(state_val, "active"),
@@ -800,7 +926,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 return self.async_show_form(
                     step_id="mode_mapping",
-                    data_schema=vol.Schema(schema_dict),
+                    data_schema=vol.Schema(error_schema_dict),
                     errors=errors,
                 )
             self._data[CONF_MODE_GUARD_MAPPING].update(user_input)
@@ -868,6 +994,59 @@ class ZeroGridOptionsFlow(config_entries.OptionsFlow):
                     CONF_CALIB_MAX_GRID_W: float(
                         user_input.get(CONF_CALIB_MAX_GRID_W, DEFAULT_CALIB_MAX_GRID_W)
                     ),
+                    CONF_ARRAY_CLIPPING_THRESHOLD: float(
+                        user_input.get(
+                            CONF_ARRAY_CLIPPING_THRESHOLD, ARRAY_CLIPPING_THRESHOLD
+                        )
+                    ),
+                    CONF_CALIB_STABLE_VARIANCE_PCT: float(
+                        user_input.get(
+                            CONF_CALIB_STABLE_VARIANCE_PCT,
+                            CALIB_STABLE_VARIANCE_PCT,
+                        )
+                    ),
+                    CONF_CALIB_STABLE_WINDOW_S: int(
+                        user_input.get(
+                            CONF_CALIB_STABLE_WINDOW_S, CALIB_STABLE_WINDOW_S
+                        )
+                    ),
+                    CONF_CALIB_BASELINE_SAMPLES: int(
+                        user_input.get(
+                            CONF_CALIB_BASELINE_SAMPLES, CALIB_BASELINE_SAMPLES
+                        )
+                    ),
+                    CONF_CALIB_SETTLING_CONFIRM_COUNT: int(
+                        user_input.get(
+                            CONF_CALIB_SETTLING_CONFIRM_COUNT,
+                            CALIB_SETTLING_CONFIRM_COUNT,
+                        )
+                    ),
+                    CONF_CALIB_SETTLING_THRESHOLD_W: float(
+                        user_input.get(
+                            CONF_CALIB_SETTLING_THRESHOLD_W,
+                            CALIB_SETTLING_THRESHOLD_W,
+                        )
+                    ),
+                    CONF_CALIB_MIN_PV_W: float(
+                        user_input.get(CONF_CALIB_MIN_PV_W, CALIB_MIN_PV_W)
+                    ),
+                    CONF_CALIB_GRID_VARIANCE_FACTOR: float(
+                        user_input.get(
+                            CONF_CALIB_GRID_VARIANCE_FACTOR,
+                            CALIB_GRID_VARIANCE_FACTOR,
+                        )
+                    ),
+                    CONF_CALIB_INTER_ARRAY_SLEEP_S: float(
+                        user_input.get(
+                            CONF_CALIB_INTER_ARRAY_SLEEP_S, CALIB_INTER_ARRAY_SLEEP_S
+                        )
+                    ),
+                    CONF_CALIB_PV_SENSOR_MAX_WAIT_S: float(
+                        user_input.get(
+                            CONF_CALIB_PV_SENSOR_MAX_WAIT_S,
+                            CALIB_PV_SENSOR_MAX_WAIT_S,
+                        )
+                    ),
                 }
             )
 
@@ -907,6 +1086,184 @@ class ZeroGridOptionsFlow(config_entries.OptionsFlow):
                                 "max": 50000,
                                 "step": 100,
                                 "unit_of_measurement": "W",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_ARRAY_CLIPPING_THRESHOLD,
+                        default=float(
+                            opts.get(
+                                CONF_ARRAY_CLIPPING_THRESHOLD,
+                                ARRAY_CLIPPING_THRESHOLD,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 0.5,
+                                "max": 1.0,
+                                "step": 0.01,
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_STABLE_VARIANCE_PCT,
+                        default=float(
+                            opts.get(
+                                CONF_CALIB_STABLE_VARIANCE_PCT,
+                                CALIB_STABLE_VARIANCE_PCT,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 0.5,
+                                "max": 100.0,
+                                "step": 0.5,
+                                "unit_of_measurement": "%",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_STABLE_WINDOW_S,
+                        default=int(
+                            opts.get(CONF_CALIB_STABLE_WINDOW_S, CALIB_STABLE_WINDOW_S)
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 5,
+                                "max": 300,
+                                "step": 1,
+                                "unit_of_measurement": "s",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_BASELINE_SAMPLES,
+                        default=int(
+                            opts.get(
+                                CONF_CALIB_BASELINE_SAMPLES,
+                                CALIB_BASELINE_SAMPLES,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 1,
+                                "max": 120,
+                                "step": 1,
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_SETTLING_CONFIRM_COUNT,
+                        default=int(
+                            opts.get(
+                                CONF_CALIB_SETTLING_CONFIRM_COUNT,
+                                CALIB_SETTLING_CONFIRM_COUNT,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 1,
+                                "max": 30,
+                                "step": 1,
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_SETTLING_THRESHOLD_W,
+                        default=float(
+                            opts.get(
+                                CONF_CALIB_SETTLING_THRESHOLD_W,
+                                CALIB_SETTLING_THRESHOLD_W,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 0,
+                                "max": 1000,
+                                "step": 1,
+                                "unit_of_measurement": "W",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_MIN_PV_W,
+                        default=float(opts.get(CONF_CALIB_MIN_PV_W, CALIB_MIN_PV_W)),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 0,
+                                "max": 10000,
+                                "step": 10,
+                                "unit_of_measurement": "W",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_GRID_VARIANCE_FACTOR,
+                        default=float(
+                            opts.get(
+                                CONF_CALIB_GRID_VARIANCE_FACTOR,
+                                CALIB_GRID_VARIANCE_FACTOR,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 1.0,
+                                "max": 20.0,
+                                "step": 0.5,
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_INTER_ARRAY_SLEEP_S,
+                        default=float(
+                            opts.get(
+                                CONF_CALIB_INTER_ARRAY_SLEEP_S,
+                                CALIB_INTER_ARRAY_SLEEP_S,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 0,
+                                "max": 300,
+                                "step": 1,
+                                "unit_of_measurement": "s",
+                                "mode": "box",
+                            }
+                        }
+                    ),
+                    vol.Required(
+                        CONF_CALIB_PV_SENSOR_MAX_WAIT_S,
+                        default=float(
+                            opts.get(
+                                CONF_CALIB_PV_SENSOR_MAX_WAIT_S,
+                                CALIB_PV_SENSOR_MAX_WAIT_S,
+                            )
+                        ),
+                    ): selector(
+                        {
+                            "number": {
+                                "min": 1,
+                                "max": 120,
+                                "step": 1,
+                                "unit_of_measurement": "s",
                                 "mode": "box",
                             }
                         }

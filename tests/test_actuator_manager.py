@@ -44,7 +44,9 @@ def _make_array(
 ) -> ArrayConfig:
     return ArrayConfig(
         name=name,
-        setpoint_entity="number.pv_limit" if output_type != OUTPUT_TYPE_SWITCH else "switch.pv",
+        setpoint_entity="number.pv_limit"
+        if output_type != OUTPUT_TYPE_SWITCH
+        else "switch.pv",
         output_type=output_type,
         pv_power_entity=None,
         setpoint_min=setpoint_min,
@@ -91,7 +93,10 @@ async def test_write_numeric_entity_number_domain() -> None:
     am = ActuatorManager(hass)
     await am.write_numeric_entity("number.pv_limit", 75.0)
     hass.services.async_call.assert_called_once_with(
-        "number", "set_value", {"entity_id": "number.pv_limit", "value": 75.0}, blocking=True
+        "number",
+        "set_value",
+        {"entity_id": "number.pv_limit", "value": 75.0},
+        blocking=True,
     )
 
 
@@ -101,7 +106,10 @@ async def test_write_numeric_entity_input_number_domain() -> None:
     am = ActuatorManager(hass)
     await am.write_numeric_entity("input_number.pv_limit", 50.0)
     hass.services.async_call.assert_called_once_with(
-        "input_number", "set_value", {"entity_id": "input_number.pv_limit", "value": 50.0}, blocking=True
+        "input_number",
+        "set_value",
+        {"entity_id": "input_number.pv_limit", "value": 50.0},
+        blocking=True,
     )
 
 
@@ -125,7 +133,10 @@ async def test_write_setpoint_number_type() -> None:
     array = _make_array(output_type=OUTPUT_TYPE_PERCENT)
     await am.write_setpoint(array, 80.0)
     hass.services.async_call.assert_called_once_with(
-        "number", "set_value", {"entity_id": "number.pv_limit", "value": 80.0}, blocking=True
+        "number",
+        "set_value",
+        {"entity_id": "number.pv_limit", "value": 80.0},
+        blocking=True,
     )
 
 
@@ -469,6 +480,7 @@ async def test_distribute_and_write_returns_switch_result_when_no_headroom() -> 
     current_setpoints = {"South": array.setpoint_min}
 
     with pytest.MonkeyPatch.context() as mp:
+
         async def _switch_result(**kwargs):
             return {"PV Switch": 1000.0}
 

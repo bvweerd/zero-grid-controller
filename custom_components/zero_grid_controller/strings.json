@@ -71,7 +71,9 @@
             "setpoint_min": "Minimum setpoint value",
             "setpoint_max": "Maximum setpoint value",
             "inverter_speed": "How fast does this inverter respond?",
-            "response_speed": "Control response speed"
+            "response_speed": "Control response speed",
+            "cloud_shadow_pv_ratio": "Cloud shadow PV ratio (0-1)",
+            "cloud_shadow_min_gap_w": "Cloud shadow minimum gap (W)"
           }
         },
         "switch_params": {
@@ -130,7 +132,15 @@
             "battery_control_enabled": "Allow Zero Grid Controller to control battery setpoint",
             "battery_setpoint_entity": "Battery setpoint entity (required when control is enabled)",
             "response_speed": "Control response speed",
-            "settling_time_s": "Settling time (s) — how long before the battery reaches its commanded power"
+            "settling_time_s": "Settling time (s) — how long before the battery reaches its commanded power",
+            "battery_write_threshold_w": "Minimum write delta (W)",
+            "battery_verification_min_w": "Minimum verification command (W)",
+            "battery_unresponsive_threshold_w": "Unresponsive detection threshold (W)",
+            "battery_unresponsive_cycles": "Unresponsive cycles",
+            "battery_response_ewm_alpha": "Response learning alpha",
+            "battery_hard_reset_ratio": "Hard reset ratio (0-1)",
+            "battery_recovery_blend": "Recovery blend (0-1)",
+            "battery_clipping_threshold": "Battery clipping threshold (0-1)"
           }
         }
       },
@@ -148,7 +158,17 @@
         "data": {
           "expert_mode": "Enable expert mode",
           "sensor_stale_s": "Sensor freshness window (s) — data older than this is treated as unavailable",
-          "calib_max_grid_w": "Calibration safety limit (W) — abort calibration if |grid power| exceeds this"
+          "calib_max_grid_w": "Calibration safety limit (W) — abort calibration if |grid power| exceeds this",
+          "array_clipping_threshold": "Array clipping threshold (0-1)",
+          "calib_stable_variance_pct": "Calibration stable variance (%)",
+          "calib_stable_window_s": "Calibration stability window (s)",
+          "calib_baseline_samples": "Calibration baseline samples",
+          "calib_settling_confirm_count": "Calibration settling confirmations",
+          "calib_settling_threshold_w": "Calibration settling threshold (W)",
+          "calib_min_pv_w": "Minimum PV power for calibration (W)",
+          "calib_grid_variance_factor": "Grid variance factor during calibration",
+          "calib_inter_array_sleep_s": "Delay between array calibrations (s)",
+          "calib_pv_sensor_max_wait_s": "PV sensor max wait per sample (s)"
         }
       }
     }

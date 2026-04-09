@@ -479,9 +479,7 @@ async def test_handle_override_setpoint_continues_after_value_error() -> None:
     _register_services(hass)
 
     coordinator_1 = MagicMock()
-    coordinator_1.async_override_setpoint = AsyncMock(
-        side_effect=ValueError("missing")
-    )
+    coordinator_1.async_override_setpoint = AsyncMock(side_effect=ValueError("missing"))
     coordinator_2 = MagicMock()
     coordinator_2.async_override_setpoint = AsyncMock()
 
@@ -642,14 +640,16 @@ async def test_setup_entry_refresh_failure_skips_platform_forwarding(
             "custom_components.zero_grid_controller.ZeroGridCoordinator.async_config_entry_first_refresh",
             new=AsyncMock(side_effect=RuntimeError("boom")),
         ),
+        pytest.raises(RuntimeError, match="boom"),
     ):
-        with pytest.raises(RuntimeError, match="boom"):
-            await async_setup_entry(hass, entry)
+        await async_setup_entry(hass, entry)
 
     forward.assert_not_called()
 
 
-async def test_async_unload_entry_failure_keeps_runtime_data(hass: HomeAssistant) -> None:
+async def test_async_unload_entry_failure_keeps_runtime_data(
+    hass: HomeAssistant,
+) -> None:
     """Failed platform unload should not clear runtime_data or remove services."""
     entry = MagicMock()
     entry.entry_id = "entry_1"

@@ -533,6 +533,32 @@ async def test_scenario_cloud_shadow_freezes_integrator(hass: HomeAssistant) -> 
     mock_write.assert_not_called()
 
 
+async def test_scenario_custom_cloud_shadow_thresholds_delay_detection(
+    hass: HomeAssistant,
+) -> None:
+    """Array-level cloud thresholds should override the default detector sensitivity."""
+    entry = _make_entry(hass, options={CONF_DEADBAND_W: 0.0})
+    hass.states.async_set("sensor.grid_power", "-500.0")
+    hass.states.async_set("sensor.pv_west_power", "50.0")
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    array = _pv_west(pv_sensor=True)
+    array.cloud_shadow_pv_ratio = 0.01
+    array.cloud_shadow_min_gap_w = 5000.0
+    _inject(coordinator, [array], {"PV West": 80.0})
+
+    with (
+        patch.object(coordinator, "_write_setpoint", new=AsyncMock()) as mock_write,
+        patch.object(coordinator, "_persist_estimators"),
+    ):
+        result = await coordinator._run_control_loop(5.0, time.monotonic())
+
+    from custom_components.zero_grid_controller.const import STATUS_CLOUD_SHADOW
+
+    assert result.status != STATUS_CLOUD_SHADOW
+    mock_write.assert_awaited()
+
+
 async def test_scenario_low_pv_does_not_trigger_cloud_shadow_on_import(
     hass: HomeAssistant,
 ) -> None:

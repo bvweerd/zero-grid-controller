@@ -13,9 +13,16 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
     BATTERY_SUBENTRY_TYPE,
+    CONF_ARRAY_CLIPPING_THRESHOLD,
     CONF_ARRAY_NAME,
+    CONF_BATTERY_CLIPPING_THRESHOLD,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_BATTERY_UNRESPONSIVE_CYCLES,
+    CONF_BATTERY_WRITE_THRESHOLD_W,
+    CONF_CALIB_BASELINE_SAMPLES,
     CONF_CALIB_MAX_GRID_W,
+    CONF_CLOUD_SHADOW_MIN_GAP_W,
+    CONF_CLOUD_SHADOW_PV_RATIO,
     CONF_EXPERT_MODE,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
@@ -289,6 +296,8 @@ async def test_options_flow_preserves_existing_unknown_options(
             CONF_EXPERT_MODE: True,
             CONF_SENSOR_STALE_S: 30,
             CONF_CALIB_MAX_GRID_W: 3200.0,
+            CONF_ARRAY_CLIPPING_THRESHOLD: 0.91,
+            CONF_CALIB_BASELINE_SAMPLES: 12,
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -296,6 +305,40 @@ async def test_options_flow_preserves_existing_unknown_options(
     assert result["data"][CONF_EXPERT_MODE] is True
     assert result["data"][CONF_SENSOR_STALE_S] == 30
     assert result["data"][CONF_CALIB_MAX_GRID_W] == 3200.0
+    assert result["data"][CONF_ARRAY_CLIPPING_THRESHOLD] == 0.91
+    assert result["data"][CONF_CALIB_BASELINE_SAMPLES] == 12
+
+
+async def test_options_flow_stores_extended_expert_thresholds(
+    hass: HomeAssistant,
+) -> None:
+    """General options flow should persist new integration-wide heuristics."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_EXPERT_MODE: True,
+            CONF_SENSOR_STALE_S: 20,
+            CONF_CALIB_MAX_GRID_W: 3500.0,
+            CONF_ARRAY_CLIPPING_THRESHOLD: 0.93,
+            CONF_CALIB_BASELINE_SAMPLES: 8,
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ARRAY_CLIPPING_THRESHOLD] == 0.93
+    assert result["data"][CONF_CALIB_BASELINE_SAMPLES] == 8
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +395,53 @@ async def test_subentry_flow_add_array(hass: HomeAssistant) -> None:
     assert result["data"][CONF_ARRAY_NAME] == "Roof South"
     assert result["data"][CONF_OUTPUT_TYPE] == OUTPUT_TYPE_PERCENT
     assert result["data"][CONF_RESPONSE_FACTOR] == 1.0
+
+
+async def test_subentry_flow_add_array_persists_cloud_shadow_thresholds(
+    hass: HomeAssistant,
+) -> None:
+    """Numeric array subentries should store array-scoped cloud-shadow heuristics."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("number.inverter_limit", "100")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_ARRAY_NAME: "Roof South",
+            CONF_SETPOINT_ENTITY: "number.inverter_limit",
+            CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT,
+        },
+    )
+    assert result["step_id"] == "setpoint_range"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "setpoint_min": 0.0,
+            "setpoint_max": 100.0,
+            CONF_INVERTER_SPEED: "normal",
+            "response_speed": "normal",
+            CONF_CLOUD_SHADOW_PV_RATIO: 0.65,
+            CONF_CLOUD_SHADOW_MIN_GAP_W: 120.0,
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CLOUD_SHADOW_PV_RATIO] == 0.65
+    assert result["data"][CONF_CLOUD_SHADOW_MIN_GAP_W] == 120.0
 
 
 async def test_subentry_flow_duplicate_array_name_rejected(
@@ -572,7 +662,9 @@ async def test_subentry_reconfigure_array_with_recalibrate_calls_service(
     )
     entry.add_to_hass(hass)
     subentry_id = next(iter(entry.subentries))
-    with patch.object(type(hass.services), "async_call", new_callable=AsyncMock) as mock_async_call:
+    with patch.object(
+        type(hass.services), "async_call", new_callable=AsyncMock
+    ) as mock_async_call:
         result = await hass.config_entries.subentries.async_init(
             (entry.entry_id, ARRAY_SUBENTRY_TYPE),
             context={
@@ -713,6 +805,54 @@ async def test_subentry_flow_add_battery(hass: HomeAssistant) -> None:
     assert result["title"] == "Home Battery"
     assert result["data"]["battery_sensor"] == "sensor.battery_power"
     assert result["data"][CONF_RESPONSE_FACTOR] == 0.5  # cautious → 0.5
+
+
+async def test_subentry_flow_add_battery_persists_response_thresholds(
+    hass: HomeAssistant,
+) -> None:
+    """Battery subentries should store battery-scoped runtime heuristics."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            "invert_sign": False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("sensor.battery_power", "0")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, BATTERY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "name": "Home Battery",
+            "battery_sensor": "sensor.battery_power",
+            "battery_max_charge_w": 3000.0,
+            "battery_max_discharge_w": 3000.0,
+        },
+    )
+    assert result["step_id"] == "battery_control"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "battery_control_enabled": False,
+            "response_speed": "normal",
+            CONF_BATTERY_WRITE_THRESHOLD_W: 25.0,
+            CONF_BATTERY_UNRESPONSIVE_CYCLES: 5,
+            CONF_BATTERY_CLIPPING_THRESHOLD: 0.98,
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_BATTERY_WRITE_THRESHOLD_W] == 25.0
+    assert result["data"][CONF_BATTERY_UNRESPONSIVE_CYCLES] == 5
+    assert result["data"][CONF_BATTERY_CLIPPING_THRESHOLD] == 0.98
 
 
 # ---------------------------------------------------------------------------

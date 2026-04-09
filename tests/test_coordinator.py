@@ -340,7 +340,10 @@ async def test_reload_config_drops_removed_array_runtime_state(
     """Reload should discard runtime state for arrays that no longer exist."""
     entry = _make_entry(
         hass,
-        subentries_data=[_array_subentry_data("Roof South"), _array_subentry_data("Roof East")],
+        subentries_data=[
+            _array_subentry_data("Roof South"),
+            _array_subentry_data("Roof East"),
+        ],
     )
     coordinator = ZeroGridCoordinator(hass, entry)
     coordinator._current_setpoints["Roof South"] = 65.0
@@ -567,9 +570,7 @@ async def test_resolve_mode_invalid_mapping_falls_back_to_active(
             CONF_MODE_GUARD_MAPPING: {"home": "unsupported"},
         },
     )
-    hass.states.async_set(
-        "input_select.optimizer", "home", {"options": ["home"]}
-    )
+    hass.states.async_set("input_select.optimizer", "home", {"options": ["home"]})
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator._resolve_mode() == MODE_ACTIVE
 

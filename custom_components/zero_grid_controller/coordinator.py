@@ -20,11 +20,30 @@ from .array import ArrayConfig, array_config_from_subentry
 from .battery import BatteryConfig, battery_config_from_subentry
 from .calibrator import ArrayCalibrator
 from .const import (
+    ARRAY_CLIPPING_THRESHOLD,
     ARRAY_SUBENTRY_TYPE,
     BATTERY_RESPONSE_PERSIST_INTERVAL_S,
     BATTERY_SUBENTRY_TYPE,
-    BATTERY_VERIFICATION_MIN_W,
+    CALIB_BASELINE_SAMPLES,
+    CALIB_GRID_VARIANCE_FACTOR,
+    CALIB_INTER_ARRAY_SLEEP_S,
+    CALIB_MIN_PV_W,
+    CALIB_PV_SENSOR_MAX_WAIT_S,
+    CALIB_SETTLING_CONFIRM_COUNT,
+    CALIB_SETTLING_THRESHOLD_W,
+    CALIB_STABLE_VARIANCE_PCT,
+    CALIB_STABLE_WINDOW_S,
+    CONF_ARRAY_CLIPPING_THRESHOLD,
+    CONF_CALIB_BASELINE_SAMPLES,
+    CONF_CALIB_GRID_VARIANCE_FACTOR,
+    CONF_CALIB_INTER_ARRAY_SLEEP_S,
     CONF_CALIB_MAX_GRID_W,
+    CONF_CALIB_MIN_PV_W,
+    CONF_CALIB_PV_SENSOR_MAX_WAIT_S,
+    CONF_CALIB_SETTLING_CONFIRM_COUNT,
+    CONF_CALIB_SETTLING_THRESHOLD_W,
+    CONF_CALIB_STABLE_VARIANCE_PCT,
+    CONF_CALIB_STABLE_WINDOW_S,
     CONF_CONTROLLER_ENABLED,
     CONF_DEADBAND_W,
     CONF_ESTIMATOR_STATE,
@@ -145,8 +164,41 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._sensor_stale_s: float = float(
             data.get(CONF_SENSOR_STALE_S, DEFAULT_SENSOR_STALE_S)
         )
+        self._array_clipping_threshold: float = float(
+            data.get(CONF_ARRAY_CLIPPING_THRESHOLD, ARRAY_CLIPPING_THRESHOLD)
+        )
         self._calib_max_grid_w: float = float(
             data.get(CONF_CALIB_MAX_GRID_W, DEFAULT_CALIB_MAX_GRID_W)
+        )
+        self._calib_stable_variance_pct: float = float(
+            data.get(CONF_CALIB_STABLE_VARIANCE_PCT, CALIB_STABLE_VARIANCE_PCT)
+        )
+        self._calib_stable_window_s: int = int(
+            data.get(CONF_CALIB_STABLE_WINDOW_S, CALIB_STABLE_WINDOW_S)
+        )
+        self._calib_baseline_samples: int = int(
+            data.get(CONF_CALIB_BASELINE_SAMPLES, CALIB_BASELINE_SAMPLES)
+        )
+        self._calib_settling_confirm_count: int = int(
+            data.get(
+                CONF_CALIB_SETTLING_CONFIRM_COUNT,
+                CALIB_SETTLING_CONFIRM_COUNT,
+            )
+        )
+        self._calib_settling_threshold_w: float = float(
+            data.get(CONF_CALIB_SETTLING_THRESHOLD_W, CALIB_SETTLING_THRESHOLD_W)
+        )
+        self._calib_min_pv_w: float = float(
+            data.get(CONF_CALIB_MIN_PV_W, CALIB_MIN_PV_W)
+        )
+        self._calib_grid_variance_factor: float = float(
+            data.get(CONF_CALIB_GRID_VARIANCE_FACTOR, CALIB_GRID_VARIANCE_FACTOR)
+        )
+        self._calib_inter_array_sleep_s: float = float(
+            data.get(CONF_CALIB_INTER_ARRAY_SLEEP_S, CALIB_INTER_ARRAY_SLEEP_S)
+        )
+        self._calib_pv_sensor_max_wait_s: float = float(
+            data.get(CONF_CALIB_PV_SENSOR_MAX_WAIT_S, CALIB_PV_SENSOR_MAX_WAIT_S)
         )
 
         # Grid measurement config
@@ -172,6 +224,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             for s in entry.subentries.values()
             if s.subentry_type == ARRAY_SUBENTRY_TYPE
         ]
+        for array in self._arrays:
+            array.array_clipping_threshold = self._array_clipping_threshold
         # Sort by max power (highest first) for intelligent priority
         self._arrays.sort(key=lambda a: a.max_power_w, reverse=True)
 
@@ -756,7 +810,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             if battery is None:
                 continue
 
-            if abs(commanded_w) < BATTERY_VERIFICATION_MIN_W:
+            if abs(commanded_w) < battery.verification_min_w:
                 result[name] = battery.is_unresponsive()
                 continue
 
@@ -1045,6 +1099,15 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 self._calibration_write_setpoint,
                 progress_callback,
                 calib_max_grid_w=self._calib_max_grid_w,
+                calib_stable_variance_pct=self._calib_stable_variance_pct,
+                calib_stable_window_s=self._calib_stable_window_s,
+                calib_baseline_samples=self._calib_baseline_samples,
+                calib_settling_confirm_count=self._calib_settling_confirm_count,
+                calib_settling_threshold_w=self._calib_settling_threshold_w,
+                calib_min_pv_w=self._calib_min_pv_w,
+                calib_grid_variance_factor=self._calib_grid_variance_factor,
+                calib_inter_array_sleep_s=self._calib_inter_array_sleep_s,
+                calib_pv_sensor_max_wait_s=self._calib_pv_sensor_max_wait_s,
             )
             await self.async_apply_calibration_results(results)
         except asyncio.CancelledError:
@@ -1082,6 +1145,16 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             self.read_grid_w,
             self._calibration_write_setpoint,
             progress_callback,
+            calib_max_grid_w=self._calib_max_grid_w,
+            calib_stable_variance_pct=self._calib_stable_variance_pct,
+            calib_stable_window_s=self._calib_stable_window_s,
+            calib_baseline_samples=self._calib_baseline_samples,
+            calib_settling_confirm_count=self._calib_settling_confirm_count,
+            calib_settling_threshold_w=self._calib_settling_threshold_w,
+            calib_min_pv_w=self._calib_min_pv_w,
+            calib_grid_variance_factor=self._calib_grid_variance_factor,
+            calib_inter_array_sleep_s=self._calib_inter_array_sleep_s,
+            calib_pv_sensor_max_wait_s=self._calib_pv_sensor_max_wait_s,
         )
         await self.async_apply_calibration_results(results)
         return results

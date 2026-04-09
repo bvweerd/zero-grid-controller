@@ -7,10 +7,6 @@ from dataclasses import dataclass
 
 from .array import ArrayConfig
 from .battery import BatteryConfig
-from .const import (
-    CLOUD_SHADOW_MIN_GAP_W,
-    CLOUD_SHADOW_PV_RATIO,
-)
 
 
 @dataclass(frozen=True)
@@ -70,8 +66,8 @@ class ControlObserver:
 
             low_generation = (
                 sp_w > 0
-                and pv_w <= sp_w * CLOUD_SHADOW_PV_RATIO
-                and (sp_w - pv_w) >= CLOUD_SHADOW_MIN_GAP_W
+                and pv_w <= sp_w * array.cloud_shadow_pv_ratio
+                and (sp_w - pv_w) >= array.cloud_shadow_min_gap_w
             )
             all_low_generation = all_low_generation and low_generation
 

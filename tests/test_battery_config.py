@@ -46,7 +46,10 @@ def test_update_response_ewm_update() -> None:
     # Commanded -1000 W, actual -900 W → ratio 0.9
     b.update_response(actual_w=-900.0, commanded_w=-1000.0)
 
-    expected = BATTERY_RESPONSE_EWM_ALPHA * 0.9 + (1 - BATTERY_RESPONSE_EWM_ALPHA) * initial_factor
+    expected = (
+        BATTERY_RESPONSE_EWM_ALPHA * 0.9
+        + (1 - BATTERY_RESPONSE_EWM_ALPHA) * initial_factor
+    )
     assert b.measured_response_factor == pytest.approx(expected, abs=1e-6)
 
 
@@ -55,6 +58,17 @@ def test_update_response_small_command_skipped() -> None:
     b = _make_battery()
     initial = b.measured_response_factor
     b.update_response(actual_w=-10.0, commanded_w=-40.0)  # below threshold
+    assert b.measured_response_factor == initial
+
+
+def test_update_response_uses_custom_unresponsive_threshold() -> None:
+    """Custom per-battery unresponsive thresholds should override the default."""
+    b = _make_battery()
+    b.unresponsive_threshold_w = 500.0
+    initial = b.measured_response_factor
+
+    b.update_response(actual_w=-150.0, commanded_w=-400.0)
+
     assert b.measured_response_factor == initial
 
 
@@ -93,7 +107,9 @@ def test_update_response_hard_reset_on_unresponsive() -> None:
         b.update_response(actual_w=tiny_actual, commanded_w=large_cmd)
 
     # Factor must have snapped to max(0.1, observed_ratio)
-    assert b.measured_response_factor == pytest.approx(max(0.1, observed_ratio), abs=1e-6)
+    assert b.measured_response_factor == pytest.approx(
+        max(0.1, observed_ratio), abs=1e-6
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +135,7 @@ def test_update_response_recovery_blend() -> None:
 
     # Recovery blends measured_response_factor toward 1.0
     blended = (
-        BATTERY_RECOVERY_BLEND * factor_at_reset
-        + (1.0 - BATTERY_RECOVERY_BLEND) * 1.0
+        BATTERY_RECOVERY_BLEND * factor_at_reset + (1.0 - BATTERY_RECOVERY_BLEND) * 1.0
     )
     # Then normal EWM applied on top
     observed_ratio = abs(good_actual) / abs(large_cmd)
@@ -149,6 +164,13 @@ def test_is_clipping_false_below_threshold() -> None:
     b = _make_battery(max_charge_w=5000.0)
     # Battery charging at -2000 W (40 % of 5000)
     assert b.is_clipping(current_power_w=-2000.0) is False
+
+
+def test_is_clipping_uses_custom_threshold() -> None:
+    """Custom clipping thresholds should be applied per battery."""
+    b = _make_battery(max_charge_w=5000.0)
+    b.clipping_threshold = 0.99
+    assert b.is_clipping(current_power_w=-4800.0) is False
 
 
 def test_is_clipping_discharging_is_false() -> None:

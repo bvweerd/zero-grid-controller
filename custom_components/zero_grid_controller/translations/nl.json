@@ -70,7 +70,9 @@
             "setpoint_min": "Minimale setpoint-waarde",
             "setpoint_max": "Maximale setpoint-waarde",
             "inverter_speed": "Hoe snel reageert deze omvormer?",
-            "response_speed": "Besturingsresponssnelheid"
+            "response_speed": "Besturingsresponssnelheid",
+            "cloud_shadow_pv_ratio": "PV-ratio voor wolkschaduw (0-1)",
+            "cloud_shadow_min_gap_w": "Minimale wolkschaduw-afwijking (W)"
           }
         },
         "switch_params": {
@@ -128,7 +130,15 @@
             "battery_control_enabled": "Laat Zero Grid Controller het batterijsetpoint aansturen",
             "battery_setpoint_entity": "Batterij setpoint-entiteit (verplicht als besturing is ingeschakeld)",
             "response_speed": "Besturingsresponssnelheid",
-            "settling_time_s": "Settlingtijd (s) — hoe lang duurt het voordat de batterij het gevraagde vermogen bereikt"
+            "settling_time_s": "Settlingtijd (s) — hoe lang duurt het voordat de batterij het gevraagde vermogen bereikt",
+            "battery_write_threshold_w": "Minimale schrijfdelta (W)",
+            "battery_verification_min_w": "Minimaal verificatiecommando (W)",
+            "battery_unresponsive_threshold_w": "Drempel voor niet-reagerend detecteren (W)",
+            "battery_unresponsive_cycles": "Aantal niet-reagerende cycli",
+            "battery_response_ewm_alpha": "Response-learning alpha",
+            "battery_hard_reset_ratio": "Hard-reset ratio (0-1)",
+            "battery_recovery_blend": "Herstelblend (0-1)",
+            "battery_clipping_threshold": "Batterij clippingdrempel (0-1)"
           }
         }
       },
@@ -145,7 +155,17 @@
         "data": {
           "expert_mode": "Expertmodus inschakelen",
           "sensor_stale_s": "Versheidsvenster sensordata (s) — data ouder dan dit wordt als onbeschikbaar beschouwd",
-          "calib_max_grid_w": "Kalibratie-veiligheidslimiet (W) — breek kalibratie af als |gridvermogen| dit overschrijdt"
+          "calib_max_grid_w": "Kalibratie-veiligheidslimiet (W) — breek kalibratie af als |gridvermogen| dit overschrijdt",
+          "array_clipping_threshold": "Array clippingdrempel (0-1)",
+          "calib_stable_variance_pct": "Kalibratie stabiele variantie (%)",
+          "calib_stable_window_s": "Kalibratie stabiliteitsvenster (s)",
+          "calib_baseline_samples": "Kalibratie baseline-samples",
+          "calib_settling_confirm_count": "Kalibratie settling-bevestigingen",
+          "calib_settling_threshold_w": "Kalibratie settlingdrempel (W)",
+          "calib_min_pv_w": "Minimaal PV-vermogen voor kalibratie (W)",
+          "calib_grid_variance_factor": "Grid-variantiefactor tijdens kalibratie",
+          "calib_inter_array_sleep_s": "Pauze tussen array-kalibraties (s)",
+          "calib_pv_sensor_max_wait_s": "Maximale wachttijd op PV-sensor per sample (s)"
         }
       }
     }

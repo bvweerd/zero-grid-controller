@@ -8,8 +8,13 @@ from typing import Any
 
 from .const import (
     ARRAY_CLIPPING_THRESHOLD,
+    CLOUD_SHADOW_MIN_GAP_W,
+    CLOUD_SHADOW_PV_RATIO,
+    CONF_ARRAY_CLIPPING_THRESHOLD,
     CONF_ARRAY_NAME,
     CONF_CALIBRATION_CONFIDENCE,
+    CONF_CLOUD_SHADOW_MIN_GAP_W,
+    CONF_CLOUD_SHADOW_PV_RATIO,
     CONF_OUTPUT_TYPE,
     CONF_PV_POWER_ENTITY,
     CONF_RESPONSE_FACTOR,
@@ -51,6 +56,9 @@ class ArrayConfig:
     response_factor: float = (
         1.0  # Weighting for setpoint distribution (0.5=cautious, 1.0=normal, 2.0=fast)
     )
+    array_clipping_threshold: float = ARRAY_CLIPPING_THRESHOLD
+    cloud_shadow_pv_ratio: float = CLOUD_SHADOW_PV_RATIO
+    cloud_shadow_min_gap_w: float = CLOUD_SHADOW_MIN_GAP_W
 
     # Switch-specific
     switch_on_threshold_w: float = DEFAULT_SWITCH_ON_THRESHOLD_W
@@ -78,7 +86,7 @@ class ArrayConfig:
         if current_setpoint_w <= 0:
             # Fully curtailed — we are the constraint, not a cloud
             return True
-        return pv_power_w >= current_setpoint_w * ARRAY_CLIPPING_THRESHOLD
+        return pv_power_w >= current_setpoint_w * self.array_clipping_threshold
 
     def headroom_up_w(self, current_setpoint: float) -> float:
         """Watt available to tighten the limit (reduce output)."""
@@ -115,6 +123,15 @@ def array_config_from_subentry(
         setpoint_max=float(data.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)),
         settling_time_s=int(data.get(CONF_SETTLING_TIME_S, DEFAULT_SETTLING_TIME_S)),
         response_factor=float(data.get(CONF_RESPONSE_FACTOR, DEFAULT_RESPONSE_FACTOR)),
+        array_clipping_threshold=float(
+            data.get(CONF_ARRAY_CLIPPING_THRESHOLD, ARRAY_CLIPPING_THRESHOLD)
+        ),
+        cloud_shadow_pv_ratio=float(
+            data.get(CONF_CLOUD_SHADOW_PV_RATIO, CLOUD_SHADOW_PV_RATIO)
+        ),
+        cloud_shadow_min_gap_w=float(
+            data.get(CONF_CLOUD_SHADOW_MIN_GAP_W, CLOUD_SHADOW_MIN_GAP_W)
+        ),
         switch_on_threshold_w=float(
             data.get(CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W)
         ),

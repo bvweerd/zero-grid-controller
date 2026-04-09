@@ -89,6 +89,15 @@ class ArrayCalibrator:
         progress_callback: Callable[[str, float], None],
         *,
         calib_max_grid_w: float = CALIB_MAX_GRID_W,
+        calib_stable_variance_pct: float = CALIB_STABLE_VARIANCE_PCT,
+        calib_stable_window_s: int = CALIB_STABLE_WINDOW_S,
+        calib_baseline_samples: int = CALIB_BASELINE_SAMPLES,
+        calib_settling_confirm_count: int = CALIB_SETTLING_CONFIRM_COUNT,
+        calib_settling_threshold_w: float = CALIB_SETTLING_THRESHOLD_W,
+        calib_min_pv_w: float = CALIB_MIN_PV_W,
+        calib_grid_variance_factor: float = CALIB_GRID_VARIANCE_FACTOR,
+        calib_inter_array_sleep_s: float = CALIB_INTER_ARRAY_SLEEP_S,
+        calib_pv_sensor_max_wait_s: float = CALIB_PV_SENSOR_MAX_WAIT_S,
     ) -> dict[str, CalibrationResult]:
         """Run calibration for all arrays and return results keyed by array name."""
         results: dict[str, CalibrationResult] = {}
@@ -111,6 +120,14 @@ class ArrayCalibrator:
                 write_setpoint,
                 lambda msg, p, bp=base_progress: progress_callback(msg, bp + p / n),  # type: ignore[misc]
                 calib_max_grid_w=calib_max_grid_w,
+                calib_stable_variance_pct=calib_stable_variance_pct,
+                calib_stable_window_s=calib_stable_window_s,
+                calib_baseline_samples=calib_baseline_samples,
+                calib_settling_confirm_count=calib_settling_confirm_count,
+                calib_settling_threshold_w=calib_settling_threshold_w,
+                calib_min_pv_w=calib_min_pv_w,
+                calib_grid_variance_factor=calib_grid_variance_factor,
+                calib_pv_sensor_max_wait_s=calib_pv_sensor_max_wait_s,
             )
             results[array.name] = result
             _LOGGER.info(
@@ -124,7 +141,7 @@ class ArrayCalibrator:
 
             # Wait before next array to let grid stabilise
             if i < n - 1 and not self._abort:
-                await asyncio.sleep(CALIB_INTER_ARRAY_SLEEP_S)
+                await asyncio.sleep(calib_inter_array_sleep_s)
 
         progress_callback("calibration_complete", 1.0)
         return results
@@ -142,6 +159,14 @@ class ArrayCalibrator:
         progress_callback: Callable[[str, float], None],
         *,
         calib_max_grid_w: float = CALIB_MAX_GRID_W,
+        calib_stable_variance_pct: float = CALIB_STABLE_VARIANCE_PCT,
+        calib_stable_window_s: int = CALIB_STABLE_WINDOW_S,
+        calib_baseline_samples: int = CALIB_BASELINE_SAMPLES,
+        calib_settling_confirm_count: int = CALIB_SETTLING_CONFIRM_COUNT,
+        calib_settling_threshold_w: float = CALIB_SETTLING_THRESHOLD_W,
+        calib_min_pv_w: float = CALIB_MIN_PV_W,
+        calib_grid_variance_factor: float = CALIB_GRID_VARIANCE_FACTOR,
+        calib_pv_sensor_max_wait_s: float = CALIB_PV_SENSOR_MAX_WAIT_S,
     ) -> CalibrationResult:
         """Calibrate a single array. Returns a CalibrationResult.
 
@@ -169,7 +194,15 @@ class ArrayCalibrator:
 
         # --- Step 1: wait for stable conditions ---
         progress_callback("calibration_waiting_sun", 0.0)
-        stable = await self._wait_for_stable(hass, array, read_grid)
+        stable = await self._wait_for_stable(
+            hass,
+            array,
+            read_grid,
+            calib_stable_variance_pct=calib_stable_variance_pct,
+            calib_stable_window_s=calib_stable_window_s,
+            calib_min_pv_w=calib_min_pv_w,
+            calib_grid_variance_factor=calib_grid_variance_factor,
+        )
         if not stable:
             return CalibrationResult(
                 w_per_unit=DEFAULT_W_PER_UNIT,
@@ -196,7 +229,8 @@ class ArrayCalibrator:
             baseline = await self._measure_pv_avg(
                 hass,
                 array.pv_power_entity,
-                samples=CALIB_BASELINE_SAMPLES,
+                samples=calib_baseline_samples,
+                max_wait_s=calib_pv_sensor_max_wait_s,
             )
             # If PV sensor appears to be frozen (slow API), fall back to grid
             if baseline is None:
@@ -206,11 +240,11 @@ class ArrayCalibrator:
                 )
                 use_pv_sensor = False
                 baseline = await self._measure_grid_avg(
-                    read_grid, samples=CALIB_BASELINE_SAMPLES
+                    read_grid, samples=calib_baseline_samples
                 )
         else:
             baseline = await self._measure_grid_avg(
-                read_grid, samples=CALIB_BASELINE_SAMPLES
+                read_grid, samples=calib_baseline_samples
             )
 
         if baseline is None:
@@ -248,7 +282,7 @@ class ArrayCalibrator:
 
         # --- Step 5: measure response ---
         start_t = time.monotonic()
-        recent: deque[float] = deque(maxlen=CALIB_SETTLING_CONFIRM_COUNT)
+        recent: deque[float] = deque(maxlen=calib_settling_confirm_count)
         settled = False
         new_baseline = baseline
         elapsed = 0.0
@@ -281,10 +315,10 @@ class ArrayCalibrator:
             # Only start checking after the inverter settling time has elapsed
             if (
                 elapsed >= array.settling_time_s
-                and len(recent) == CALIB_SETTLING_CONFIRM_COUNT
+                and len(recent) == calib_settling_confirm_count
             ):
                 avg = sum(recent) / len(recent)
-                if all(abs(v - avg) < CALIB_SETTLING_THRESHOLD_W for v in recent):
+                if all(abs(v - avg) < calib_settling_threshold_w for v in recent):
                     new_baseline = avg
                     settled = True
                     break
@@ -337,6 +371,11 @@ class ArrayCalibrator:
         hass: HomeAssistant,
         array: ArrayConfig,
         read_grid: Callable[[], float | None],
+        *,
+        calib_stable_variance_pct: float = CALIB_STABLE_VARIANCE_PCT,
+        calib_stable_window_s: int = CALIB_STABLE_WINDOW_S,
+        calib_min_pv_w: float = CALIB_MIN_PV_W,
+        calib_grid_variance_factor: float = CALIB_GRID_VARIANCE_FACTOR,
     ) -> bool:
         """Wait up to _STABLE_WINDOW_S for stable PV output.
 
@@ -344,23 +383,25 @@ class ArrayCalibrator:
         """
         if array.pv_power_entity is None:
             # No PV sensor — check grid stability instead of blindly waiting
-            grid_samples: deque[float] = deque(maxlen=CALIB_STABLE_WINDOW_S)
-            for _ in range(CALIB_STABLE_WINDOW_S):
+            grid_samples: deque[float] = deque(maxlen=calib_stable_window_s)
+            for _ in range(calib_stable_window_s):
                 val = read_grid()
                 if val is not None:
                     grid_samples.append(val)
                 await asyncio.sleep(1.0)
-            if len(grid_samples) < CALIB_STABLE_WINDOW_S // 2:
+            if len(grid_samples) < calib_stable_window_s // 2:
                 return False
             avg = sum(grid_samples) / len(grid_samples)
             variance_pct = (
                 (max(grid_samples) - min(grid_samples)) / max(abs(avg), 1.0) * 100
             )
             # Grid is inherently noisier than PV; allow CALIB_GRID_VARIANCE_FACTOR× the PV variance threshold
-            return variance_pct < CALIB_STABLE_VARIANCE_PCT * CALIB_GRID_VARIANCE_FACTOR
+            return variance_pct < (
+                calib_stable_variance_pct * calib_grid_variance_factor
+            )
 
-        samples: deque[float] = deque(maxlen=CALIB_STABLE_WINDOW_S)
-        deadline = time.monotonic() + CALIB_STABLE_WINDOW_S * 2
+        samples: deque[float] = deque(maxlen=calib_stable_window_s)
+        deadline = time.monotonic() + calib_stable_window_s * 2
 
         while time.monotonic() < deadline:
             state = hass.states.get(array.pv_power_entity)
@@ -371,17 +412,17 @@ class ArrayCalibrator:
                 except ValueError:
                     pass
 
-            if len(samples) >= CALIB_STABLE_WINDOW_S:
+            if len(samples) >= calib_stable_window_s:
                 avg = sum(samples) / len(samples)
-                if avg < CALIB_MIN_PV_W:
+                if avg < calib_min_pv_w:
                     return False  # Not enough sun
                 variance_pct = (max(samples) - min(samples)) / avg * 100
-                if variance_pct < CALIB_STABLE_VARIANCE_PCT:
+                if variance_pct < calib_stable_variance_pct:
                     return True
 
             await asyncio.sleep(1.0)
 
-        return len(samples) >= CALIB_STABLE_WINDOW_S // 2
+        return len(samples) >= calib_stable_window_s // 2
 
     async def _measure_grid_avg(
         self,
@@ -404,6 +445,7 @@ class ArrayCalibrator:
         hass: HomeAssistant,
         entity_id: str,
         samples: int = 10,
+        max_wait_s: float = CALIB_PV_SENSOR_MAX_WAIT_S,
     ) -> float | None:
         """Measure average PV power over `samples` distinct sensor updates.
 
@@ -430,7 +472,7 @@ class ArrayCalibrator:
             if len(readings) < samples:
                 # Wait up to CALIB_PV_SENSOR_MAX_WAIT_S for the next update
                 waited = 0.0
-                while waited < CALIB_PV_SENSOR_MAX_WAIT_S:
+                while waited < max_wait_s:
                     await asyncio.sleep(1.0)
                     waited += 1.0
                     new_state = hass.states.get(entity_id)
@@ -441,7 +483,7 @@ class ArrayCalibrator:
                     _LOGGER.debug(
                         "PV sensor %s did not update within %d s",
                         entity_id,
-                        CALIB_PV_SENSOR_MAX_WAIT_S,
+                        max_wait_s,
                     )
                     if not readings:
                         return None  # never got a single reading

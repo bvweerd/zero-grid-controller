@@ -56,15 +56,15 @@ from custom_components.zero_grid_controller.pid import PIDController
 # ---------------------------------------------------------------------------
 
 # automation.yaml: W_PER_PCT_ZOLDER = 36, W_PER_PCT_ZUID = 10
-W_PER_UNIT_ZOLDER = 36.0   # Watts per 1 % of power-limit setpoint (zolder)
-W_PER_UNIT_SOUTH  = 10.0   # Watts per 1 % of power-limit setpoint (south)
+W_PER_UNIT_ZOLDER = 36.0  # Watts per 1 % of power-limit setpoint (zolder)
+W_PER_UNIT_SOUTH = 10.0  # Watts per 1 % of power-limit setpoint (south)
 
 # Default w_per_unit used when the integration is not calibrated:
 W_PER_UNIT_DEFAULT = 10.0
 
 # Solar potential observed in the field run (W), unthrottled:
-SOLAR_ZOLDER_STEADY = 1960.0   # average during 13:01–13:05
-SOLAR_SOUTH_STEADY  =  760.0   # average during 13:01–13:05
+SOLAR_ZOLDER_STEADY = 1960.0  # average during 13:01–13:05
+SOLAR_SOUTH_STEADY = 760.0  # average during 13:01–13:05
 
 # Estimated house consumption (W): inferred so that grid ≈ 0 requires
 # combined setpoints at ~8–9 % for zolder and ~30 % for south.
@@ -82,7 +82,7 @@ DEFAULT_EWM_ALPHA = 0.3
 DEADBAND_W = 20.0
 
 # Control interval from const.py
-CONTROL_DT = 5.0   # seconds
+CONTROL_DT = 5.0  # seconds
 
 # Inverter first-order lag time constant (s).  Smaller inverters settle faster;
 # the zolder unit showed a rise-time of ~60 s for large steps in the field.
@@ -92,6 +92,7 @@ INVERTER_TAU_S = 20.0
 # ---------------------------------------------------------------------------
 # Simulation helpers
 # ---------------------------------------------------------------------------
+
 
 class Inverter:
     """First-order lag model of a PV inverter with a power-limit setpoint.
@@ -113,7 +114,7 @@ class Inverter:
         self.w_per_unit = w_per_unit
         self.tau_s = tau_s
         self.setpoint_max = setpoint_max
-        self.setpoint: float = setpoint_max   # starts fully open
+        self.setpoint: float = setpoint_max  # starts fully open
         self.output_w: float = min(solar_potential_w, setpoint_max * w_per_unit)
 
     def step(self, new_setpoint: float, dt: float) -> float:
@@ -160,6 +161,7 @@ def simulate_pid(
     history_pid: list[float] = []
 
     import random
+
     rng = random.Random(42)
 
     for _step in range(n_steps):
@@ -203,7 +205,9 @@ def simulate_pid(
             elif delta_w > 0:
                 headrooms.append(max(0.0, current_setpoints[i] - 0.0) * inv.w_per_unit)
             else:
-                headrooms.append(max(0.0, inv.setpoint_max - current_setpoints[i]) * inv.w_per_unit)
+                headrooms.append(
+                    max(0.0, inv.setpoint_max - current_setpoints[i]) * inv.w_per_unit
+                )
 
         total_headroom = sum(headrooms)
         for i, inv in enumerate(inverters):
@@ -212,7 +216,9 @@ def simulate_pid(
                 continue
             share_w = delta_w * headrooms[i] / total_headroom
             delta_unit = share_w / inv.w_per_unit
-            delta_unit = math.floor(delta_unit) if delta_w > 0 else math.ceil(delta_unit)
+            delta_unit = (
+                math.floor(delta_unit) if delta_w > 0 else math.ceil(delta_unit)
+            )
             if delta_unit == 0:
                 history_setpoints[i].append(current_setpoints[i])
                 continue
@@ -236,7 +242,7 @@ def simulate_proportional_automation(
     inverter: Inverter,
     consumption_w: float,
     w_per_unit: float = W_PER_UNIT_ZOLDER,
-    dt: float = 30.0,          # automation runs every 30 s
+    dt: float = 30.0,  # automation runs every 30 s
     n_steps: int = 40,
     deadband_w: float = 36.0,  # automation deadband = THR_ZOLDER
     noise_w: float = 0.0,
@@ -247,6 +253,7 @@ def simulate_proportional_automation(
     new_sp = old_sp + floor(dPct)
     """
     import random
+
     rng = random.Random(42)
 
     current_sp = inverter.setpoint
@@ -279,6 +286,7 @@ def simulate_proportional_automation(
 # Test 1: PID converges to zero grid with correct calibration
 # ---------------------------------------------------------------------------
 
+
 def test_pid_converges_to_zero_grid_single_inverter() -> None:
     """With correct w_per_unit and PI gains, the grid power should converge to ≈ 0.
 
@@ -305,7 +313,7 @@ def test_pid_converges_to_zero_grid_single_inverter() -> None:
     )
 
     # After 300 × 5 s = 25 minutes the grid should be within deadband
-    final_grid = result["grid_w"][-20:]   # last 20 samples = 100 s
+    final_grid = result["grid_w"][-20:]  # last 20 samples = 100 s
     avg_final_grid = sum(final_grid) / len(final_grid)
 
     assert abs(avg_final_grid) < DEADBAND_W * 2, (
@@ -313,14 +321,13 @@ def test_pid_converges_to_zero_grid_single_inverter() -> None:
     )
     # Setpoint should be roughly consumption / w_per_unit = 500 / 36 ≈ 14 %
     final_sp = result["setpoints"][0][-1]
-    assert 5.0 <= final_sp <= 30.0, (
-        f"Setpoint should be ~14 %, got {final_sp:.1f} %"
-    )
+    assert 5.0 <= final_sp <= 30.0, f"Setpoint should be ~14 %, got {final_sp:.1f} %"
 
 
 # ---------------------------------------------------------------------------
 # Test 2: Proportional-only (old automation) has steady-state error
 # ---------------------------------------------------------------------------
+
 
 def test_proportional_only_steady_state_error() -> None:
     """Proportional-only control should converge but may oscillate under noise.
@@ -342,7 +349,7 @@ def test_proportional_only_steady_state_error() -> None:
         inverter=inv,
         consumption_w=CONSUMPTION_W,
         noise_w=0.0,
-        n_steps=40,   # 40 × 30 s = 20 minutes — enough for lag to settle
+        n_steps=40,  # 40 × 30 s = 20 minutes — enough for lag to settle
     )
     final_grid_clean = result_clean["grid_w"][-5:]
     avg_clean = sum(final_grid_clean) / len(final_grid_clean)
@@ -378,6 +385,7 @@ def test_proportional_only_steady_state_error() -> None:
 # Test 3: Settling-freeze prevents integrator windup
 # ---------------------------------------------------------------------------
 
+
 def test_settling_freeze_reduces_overshoot() -> None:
     """Without settling freeze the integrator overshoots; with freeze it doesn't.
 
@@ -399,7 +407,7 @@ def test_settling_freeze_reduces_overshoot() -> None:
             consumption_w=CONSUMPTION_W,
             kp=DEFAULT_KP,
             ki=DEFAULT_KI,
-            n_steps=60,   # first 60 × 5 s = 5 minutes
+            n_steps=60,  # first 60 × 5 s = 5 minutes
             settling_time_s=15.0,
             dt=CONTROL_DT,
             freeze_during_settling=freeze,
@@ -408,7 +416,7 @@ def test_settling_freeze_reduces_overshoot() -> None:
         # Peak undershoot: how far below target_sp did setpoint go?
         return max(0.0, target_sp - min(sps))
 
-    overshoot_no_freeze  = run(freeze=False)
+    overshoot_no_freeze = run(freeze=False)
     overshoot_with_freeze = run(freeze=True)
 
     assert overshoot_with_freeze <= overshoot_no_freeze + 5.0, (
@@ -420,6 +428,7 @@ def test_settling_freeze_reduces_overshoot() -> None:
 # ---------------------------------------------------------------------------
 # Test 4: Wrong w_per_unit calibration causes oscillation
 # ---------------------------------------------------------------------------
+
 
 def test_wrong_calibration_causes_oscillation() -> None:
     """Using default w_per_unit=10 for a 36 W/% inverter makes the effective gain
@@ -454,18 +463,18 @@ def test_wrong_calibration_causes_oscillation() -> None:
             consumption_w=CONSUMPTION_W,
             kp=DEFAULT_KP,
             ki=DEFAULT_KI,
-            n_steps=30,   # 30 × 5 s = 2.5 minutes (match the field observation)
+            n_steps=30,  # 30 × 5 s = 2.5 minutes (match the field observation)
             settling_time_s=15.0,
             dt=CONTROL_DT,
             freeze_during_settling=True,
         )
         return result["setpoints"][0]
 
-    sps_correct = run_with_calibration(W_PER_UNIT_ZOLDER)   # 36
-    sps_wrong   = run_with_calibration(W_PER_UNIT_DEFAULT)  # 10 (3.6× too high gain)
+    sps_correct = run_with_calibration(W_PER_UNIT_ZOLDER)  # 36
+    sps_wrong = run_with_calibration(W_PER_UNIT_DEFAULT)  # 10 (3.6× too high gain)
 
     reversals_correct = count_reversals(sps_correct)
-    reversals_wrong   = count_reversals(sps_wrong)
+    reversals_wrong = count_reversals(sps_wrong)
 
     # Wrong calibration should produce more oscillation (direction reversals)
     assert reversals_wrong >= reversals_correct, (
@@ -477,6 +486,7 @@ def test_wrong_calibration_causes_oscillation() -> None:
 # ---------------------------------------------------------------------------
 # Test 5: Historical startup replay — 13:00 field scenario
 # ---------------------------------------------------------------------------
+
 
 def test_historical_startup_13h00_correct_config() -> None:
     """Replay the 13:00 startup: rising solar from ~950 W to ~1960 W (zolder)
@@ -503,27 +513,29 @@ def test_historical_startup_13h00_correct_config() -> None:
         def step(self, new_setpoint: float, dt: float) -> float:
             self._elapsed += dt
             frac = min(1.0, self._elapsed / self._ramp_s)
-            self.solar_potential_w = self._start_w + frac * (self._end_w - self._start_w)
+            self.solar_potential_w = self._start_w + frac * (
+                self._end_w - self._start_w
+            )
             return super().step(new_setpoint, dt)
 
     zolder = RisingInverter(
-        start_w=942.0,          # 13:00:16 field reading
+        start_w=942.0,  # 13:00:16 field reading
         end_w=SOLAR_ZOLDER_STEADY,
         ramp_s=60.0,
         w_per_unit=W_PER_UNIT_ZOLDER,
         tau_s=INVERTER_TAU_S,
     )
-    zolder.setpoint = 4.0       # last setpoint from old automation
+    zolder.setpoint = 4.0  # last setpoint from old automation
     zolder.output_w = 942.0
 
     south = RisingInverter(
-        start_w=192.0,          # 13:00:03 field reading
+        start_w=192.0,  # 13:00:03 field reading
         end_w=SOLAR_SOUTH_STEADY,
         ramp_s=30.0,
         w_per_unit=W_PER_UNIT_SOUTH,
         tau_s=INVERTER_TAU_S,
     )
-    south.setpoint = 7.0        # last setpoint from old automation
+    south.setpoint = 7.0  # last setpoint from old automation
     south.output_w = 192.0
 
     result = simulate_pid(
@@ -531,7 +543,7 @@ def test_historical_startup_13h00_correct_config() -> None:
         consumption_w=CONSUMPTION_W,
         kp=DEFAULT_KP,
         ki=DEFAULT_KI,
-        n_steps=200,            # 200 × 5 s = ~17 minutes
+        n_steps=200,  # 200 × 5 s = ~17 minutes
         settling_time_s=15.0,
         dt=CONTROL_DT,
     )
@@ -539,15 +551,13 @@ def test_historical_startup_13h00_correct_config() -> None:
     # After 10 minutes (120 samples) grid should be near zero
     grid_after_10min = result["grid_w"][120:]
     avg = sum(grid_after_10min) / len(grid_after_10min)
-    assert abs(avg) < 100.0, (
-        f"Expected grid ≈ 0 W after 10 min, got {avg:.1f} W"
-    )
+    assert abs(avg) < 100.0, f"Expected grid ≈ 0 W after 10 min, got {avg:.1f} W"
 
     # Setpoints should be in the physically-meaningful range
     final_sp_zolder = result["setpoints"][0][-1]
-    final_sp_south  = result["setpoints"][1][-1]
+    final_sp_south = result["setpoints"][1][-1]
     assert 0.0 <= final_sp_zolder <= 100.0
-    assert 0.0 <= final_sp_south  <= 100.0
+    assert 0.0 <= final_sp_south <= 100.0
 
 
 def test_historical_startup_wrong_setpoint_entity() -> None:
@@ -590,7 +600,7 @@ def test_historical_startup_wrong_setpoint_entity() -> None:
         consumption_w=CONSUMPTION_W,
         kp=DEFAULT_KP,
         ki=DEFAULT_KI,
-        n_steps=60,   # 5 minutes
+        n_steps=60,  # 5 minutes
         settling_time_s=15.0,
         dt=CONTROL_DT,
     )
@@ -609,6 +619,7 @@ def test_historical_startup_wrong_setpoint_entity() -> None:
 # Test 6: PI outperforms P-only under load step
 # ---------------------------------------------------------------------------
 
+
 def test_pi_outperforms_p_only_after_load_step() -> None:
     """When consumption changes mid-run, PI (with integral) corrects to zero
     while P-only (old automation) leaves a proportional-to-load-change residual.
@@ -622,7 +633,7 @@ def test_pi_outperforms_p_only_after_load_step() -> None:
             w_per_unit=W_PER_UNIT_ZOLDER,
             tau_s=INVERTER_TAU_S,
         )
-        inv.setpoint = 14.0      # start near steady state
+        inv.setpoint = 14.0  # start near steady state
         inv.output_w = CONSUMPTION_W  # roughly balanced
 
         pid = PIDController(
@@ -638,11 +649,15 @@ def test_pi_outperforms_p_only_after_load_step() -> None:
 
         grid_history: list[float] = []
 
-        for step in range(180):   # 15 minutes total
-            consumption = CONSUMPTION_W + (200.0 if step >= 60 else 0.0)  # step at 5 min
+        for step in range(180):  # 15 minutes total
+            consumption = CONSUMPTION_W + (
+                200.0 if step >= 60 else 0.0
+            )  # step at 5 min
             pv_w = inv.step(current_sp, CONTROL_DT)
             raw_grid = consumption - pv_w
-            filtered_w = DEFAULT_EWM_ALPHA * raw_grid + (1 - DEFAULT_EWM_ALPHA) * filtered_w
+            filtered_w = (
+                DEFAULT_EWM_ALPHA * raw_grid + (1 - DEFAULT_EWM_ALPHA) * filtered_w
+            )
             grid_history.append(filtered_w)
 
             if abs(filtered_w) < DEADBAND_W:
@@ -654,7 +669,11 @@ def test_pi_outperforms_p_only_after_load_step() -> None:
                 pid.freeze_integrator()
 
             delta_w = pid.compute(filtered_w, CONTROL_DT)
-            delta_unit = math.floor(delta_w / inv.w_per_unit) if delta_w > 0 else math.ceil(delta_w / inv.w_per_unit)
+            delta_unit = (
+                math.floor(delta_w / inv.w_per_unit)
+                if delta_w > 0
+                else math.ceil(delta_w / inv.w_per_unit)
+            )
             if delta_unit != 0:
                 new_sp = max(0.0, min(inv.setpoint_max, current_sp - delta_unit))
                 if new_sp != current_sp:
@@ -667,7 +686,7 @@ def test_pi_outperforms_p_only_after_load_step() -> None:
         return sum(grid_history[-36:]) / 36
 
     error_pi = run_step_response(use_integral=True)
-    error_p  = run_step_response(use_integral=False)
+    error_p = run_step_response(use_integral=False)
 
     # PI should have lower steady-state error than P-only
     assert abs(error_pi) < abs(error_p) + DEADBAND_W, (
@@ -682,6 +701,7 @@ def test_pi_outperforms_p_only_after_load_step() -> None:
 # ---------------------------------------------------------------------------
 # Test 7: Field data values are physically consistent
 # ---------------------------------------------------------------------------
+
 
 def test_field_data_physical_consistency() -> None:
     """Sanity-check the values extracted from history.csv.
@@ -705,8 +725,8 @@ def test_field_data_physical_consistency() -> None:
     # zolder ran at 29–38 % → power = 29–38 × 36 = 1044–1368 W reduction
     # At ~30 % reduction: allowed = 3600 - 1080 = 2520 W; actual ~1960 W → not binding
     # This explains why the old automation never truly eliminated export
-    max_reduction_zolder = 38 * W_PER_UNIT_ZOLDER   # W of curtailment
-    solar_at_30pct_reduction = SOLAR_ZOLDER_STEADY   # unthrottled in that window
+    max_reduction_zolder = 38 * W_PER_UNIT_ZOLDER  # W of curtailment
+    solar_at_30pct_reduction = SOLAR_ZOLDER_STEADY  # unthrottled in that window
     assert solar_at_30pct_reduction < (3600 - max_reduction_zolder + 200), (
         "Old automation was NOT curtailing zolder (limit wasn't binding)"
     )
@@ -716,11 +736,13 @@ def test_field_data_physical_consistency() -> None:
 # Test 8: PID stability under rapid solar ramp (cloud clearing)
 # ---------------------------------------------------------------------------
 
+
 def test_stability_under_rapid_solar_ramp() -> None:
     """Simulate cloud clearing: PV goes from 200 W to 2000 W in 30 s.
 
     The controller should not produce runaway setpoints; output must stay in [0, 100].
     """
+
     class RampingInverter(Inverter):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
@@ -728,8 +750,10 @@ def test_stability_under_rapid_solar_ramp() -> None:
 
         def step(self, new_setpoint: float, dt: float) -> float:
             self._steps += 1
-            if self._steps <= 6:   # first 30 s
-                self.solar_potential_w = 200.0 + (self._steps / 6) * (SOLAR_ZOLDER_STEADY - 200)
+            if self._steps <= 6:  # first 30 s
+                self.solar_potential_w = 200.0 + (self._steps / 6) * (
+                    SOLAR_ZOLDER_STEADY - 200
+                )
             else:
                 self.solar_potential_w = SOLAR_ZOLDER_STEADY
             return super().step(new_setpoint, dt)
@@ -796,6 +820,7 @@ def _simulate_calibration(
       'elapsed_s':    total time taken
     """
     import random
+
     rng = random.Random(7)
 
     # Step 1: measure baseline grid (10 × 1 s samples, then average)
@@ -812,6 +837,7 @@ def _simulate_calibration(
 
     # Step 3: apply step, sample grid at 1 s intervals until settling detected
     from collections import deque
+
     recent: deque = deque(maxlen=_CALIB_SETTLING_CONFIRM_COUNT)
     settled = False
     new_baseline = baseline
@@ -855,6 +881,7 @@ def _simulate_calibration(
 # Test 9: Calibrator succeeds when grid is quiet
 # ---------------------------------------------------------------------------
 
+
 def test_calibrator_succeeds_with_low_noise_zolder() -> None:
     """Zolder (36 W/%, τ=20 s): step = 10 units = 360 W.
 
@@ -862,14 +889,12 @@ def test_calibrator_succeeds_with_low_noise_zolder() -> None:
     around t = 30–60 s and the measured w_per_unit should be close to 36.
     """
     result = _simulate_calibration(
-        w_per_unit=W_PER_UNIT_ZOLDER,   # 36
-        tau_s=INVERTER_TAU_S,            # 20 s
-        grid_noise_w=3.0,                # very quiet grid
+        w_per_unit=W_PER_UNIT_ZOLDER,  # 36
+        tau_s=INVERTER_TAU_S,  # 20 s
+        grid_noise_w=3.0,  # very quiet grid
     )
 
-    assert result["settled"], (
-        "Calibrator should settle with low grid noise"
-    )
+    assert result["settled"], "Calibrator should settle with low grid noise"
     measured = result["w_per_unit"]
     assert 20.0 <= measured <= 50.0, (
         f"Measured w_per_unit {measured:.1f} should be near 36 W/%"
@@ -883,7 +908,7 @@ def test_calibrator_succeeds_with_low_noise_south() -> None:
     Step is smaller relative to noise, but still detectable at low noise.
     """
     result = _simulate_calibration(
-        w_per_unit=W_PER_UNIT_SOUTH,    # 10
+        w_per_unit=W_PER_UNIT_SOUTH,  # 10
         tau_s=INVERTER_TAU_S,
         grid_noise_w=3.0,
     )
@@ -901,6 +926,7 @@ def test_calibrator_succeeds_with_low_noise_south() -> None:
 # Test 10: Calibrator fails when grid noise > settling threshold
 # ---------------------------------------------------------------------------
 
+
 def test_calibrator_fails_with_high_noise_zolder() -> None:
     """With realistic household grid noise (σ=30 W), the 5 W settling window
     for 5 consecutive seconds is rarely satisfied.
@@ -916,7 +942,7 @@ def test_calibrator_fails_with_high_noise_zolder() -> None:
     result = _simulate_calibration(
         w_per_unit=W_PER_UNIT_ZOLDER,
         tau_s=INVERTER_TAU_S,
-        grid_noise_w=30.0,   # typical household grid noise
+        grid_noise_w=30.0,  # typical household grid noise
     )
 
     # With 30 W noise the calibrator should NOT settle within 180 s
@@ -946,6 +972,7 @@ def test_calibrator_fails_with_high_noise_south() -> None:
 # Test 11: Calibrator noise boundary — threshold between pass and fail
 # ---------------------------------------------------------------------------
 
+
 def test_calibrator_noise_threshold() -> None:
     """Establish the noise level at which calibration starts working reliably.
 
@@ -957,10 +984,14 @@ def test_calibrator_noise_threshold() -> None:
     This demonstrates why CALIB_SETTLING_THRESHOLD_W = 5 W is too tight for
     typical home installations with switching loads.
     """
-    results_low  = [_simulate_calibration(W_PER_UNIT_ZOLDER, INVERTER_TAU_S, 4.0) for _ in range(3)]
-    results_high = [_simulate_calibration(W_PER_UNIT_ZOLDER, INVERTER_TAU_S, 25.0) for _ in range(3)]
+    results_low = [
+        _simulate_calibration(W_PER_UNIT_ZOLDER, INVERTER_TAU_S, 4.0) for _ in range(3)
+    ]
+    results_high = [
+        _simulate_calibration(W_PER_UNIT_ZOLDER, INVERTER_TAU_S, 25.0) for _ in range(3)
+    ]
 
-    settled_low  = sum(1 for r in results_low  if r["settled"])
+    settled_low = sum(1 for r in results_low if r["settled"])
     settled_high = sum(1 for r in results_high if r["settled"])
 
     assert settled_low > settled_high, (
@@ -989,26 +1020,33 @@ def _run_rls_scenario(
     w_per_unit_real.  Returns (estimator, K_history).
     """
     import random
+
     rng = random.Random(99)
 
-    rls = RLSEstimator(forgetting_factor_per_s=0.99, settling_time_s=15, update_interval_s=5.0)
+    rls = RLSEstimator(
+        forgetting_factor_per_s=0.99, settling_time_s=15, update_interval_s=5.0
+    )
     pid = PIDController(kp=DEFAULT_KP, ki=DEFAULT_KI, kd=0.0, setpoint=0.0)
 
     sp = initial_sp
-    pv_w = initial_sp * w_per_unit_real    # current PV output (W)
+    pv_w = initial_sp * w_per_unit_real  # current PV output (W)
     grid_w = CONSUMPTION_W - pv_w
-    prev_delta_sp_w = 0.0                  # last commanded setpoint change in W
+    prev_delta_sp_w = 0.0  # last commanded setpoint change in W
 
     K_history: list[float] = []
 
     for _ in range(n_updates):
         # EWM-filtered grid
-        filtered = DEFAULT_EWM_ALPHA * (grid_w + rng.gauss(0, noise_w)) + (1 - DEFAULT_EWM_ALPHA) * grid_w
+        filtered = (
+            DEFAULT_EWM_ALPHA * (grid_w + rng.gauss(0, noise_w))
+            + (1 - DEFAULT_EWM_ALPHA) * grid_w
+        )
 
         # PID output → setpoint change
         delta_w = pid.compute(filtered, CONTROL_DT)
         delta_sp_assumed = (
-            math.floor(delta_w / w_per_unit_assumed) if delta_w > 0
+            math.floor(delta_w / w_per_unit_assumed)
+            if delta_w > 0
             else math.ceil(delta_w / w_per_unit_assumed)
         )
         new_sp = max(0.0, min(100.0, sp - delta_sp_assumed))
@@ -1039,6 +1077,7 @@ def _run_rls_scenario(
 # Test 12: RLS converges to K ≈ -1 with correct w_per_unit
 # ---------------------------------------------------------------------------
 
+
 def test_rls_converges_with_direct_updates() -> None:
     """Directly feed the RLS the (u, y) pairs it would see in steady closed-loop
     operation with correct w_per_unit.
@@ -1051,25 +1090,26 @@ def test_rls_converges_with_direct_updates() -> None:
     This tests the RLS algorithm directly, independent of PID convergence speed.
     """
     import random
+
     rng = random.Random(17)
 
-    rls = RLSEstimator(forgetting_factor_per_s=0.99, settling_time_s=15, update_interval_s=5.0)
+    rls = RLSEstimator(
+        forgetting_factor_per_s=0.99, settling_time_s=15, update_interval_s=5.0
+    )
     noise_w = 20.0
 
-    for _ in range(60):   # 60 updates = 5 minutes of 5 s cycles
+    for _ in range(60):  # 60 updates = 5 minutes of 5 s cycles
         # Typical setpoint change: curtail by 5–15 units of 36 W each
-        u = rng.uniform(-15, -2) * W_PER_UNIT_ZOLDER   # negative = curtail
+        u = rng.uniform(-15, -2) * W_PER_UNIT_ZOLDER  # negative = curtail
         # True response: grid rises (less export) by exactly |u| with noise
-        y = -u + rng.gauss(0, noise_w)                 # y ≈ -u (K=-1 system)
+        y = -u + rng.gauss(0, noise_w)  # y ≈ -u (K=-1 system)
         rls.update(u, y)
 
     # After 60 clean updates K should have converged toward -1
     assert rls.is_reliable, (
         f"RLS should be reliable after 60 direct updates (P={rls.uncertainty:.3f})"
     )
-    assert -2.0 <= rls.gain <= -0.3, (
-        f"K should converge near -1.0, got {rls.gain:.3f}"
-    )
+    assert -2.0 <= rls.gain <= -0.3, f"K should converge near -1.0, got {rls.gain:.3f}"
 
 
 def test_rls_few_updates_in_steady_state() -> None:
@@ -1104,6 +1144,7 @@ def test_rls_few_updates_in_steady_state() -> None:
 # Test 13: RLS detects over-responsive system (wrong w_per_unit)
 # ---------------------------------------------------------------------------
 
+
 def test_rls_detects_wrong_calibration() -> None:
     """If w_per_unit_assumed = 10 but reality is 36, each commanded W causes
     3.6× more grid response than expected.  K converges toward -3.6, which
@@ -1115,7 +1156,7 @@ def test_rls_detects_wrong_calibration() -> None:
     unit mismatch — overshoot remains until w_per_unit is corrected.
     """
     rls_wrong, K_hist_wrong = _run_rls_scenario(
-        w_per_unit_real=W_PER_UNIT_ZOLDER,     # 36 (real)
+        w_per_unit_real=W_PER_UNIT_ZOLDER,  # 36 (real)
         w_per_unit_assumed=W_PER_UNIT_DEFAULT,  # 10 (wrong default)
         noise_w=30.0,
     )
@@ -1143,6 +1184,7 @@ def test_rls_detects_wrong_calibration() -> None:
 # Test 14: RLS stays near prior when inverter does not respond (wrong entity)
 # ---------------------------------------------------------------------------
 
+
 def test_rls_no_response_stays_at_prior() -> None:
     """If the setpoint entity is a helper that does not control the inverter,
     u (commanded W) is non-zero but y (grid change) is pure noise.
@@ -1154,7 +1196,7 @@ def test_rls_no_response_stays_at_prior() -> None:
     input_number.* helpers while the inverter kept running at full output.
     """
     rls, K_hist = _run_rls_scenario(
-        w_per_unit_real=0.0,               # inverter ignores setpoints
+        w_per_unit_real=0.0,  # inverter ignores setpoints
         w_per_unit_assumed=W_PER_UNIT_ZOLDER,
         noise_w=50.0,
         n_updates=200,
@@ -1163,9 +1205,7 @@ def test_rls_no_response_stays_at_prior() -> None:
     # With no real response the estimator should not declare itself reliable
     # (P stays high because gain estimate keeps bouncing under noise)
     # K should stay roughly bounded since prior was -1.0
-    assert abs(rls.gain) < 20.0, (
-        f"K should stay bounded near prior: {rls.gain:.3f}"
-    )
+    assert abs(rls.gain) < 20.0, f"K should stay bounded near prior: {rls.gain:.3f}"
     # If it does go reliable, the gain must be near zero (no response ≈ K ≈ 0)
     if rls.is_reliable:
         assert abs(rls.gain) < 2.0, (
@@ -1176,6 +1216,7 @@ def test_rls_no_response_stays_at_prior() -> None:
 # ---------------------------------------------------------------------------
 # Test 15: suggest_kp blends conservatively (max 20 % change per call)
 # ---------------------------------------------------------------------------
+
 
 def test_rls_suggest_kp_blends_conservatively() -> None:
     """suggest_kp applies at most 20 % of the step toward the optimal Kp.
@@ -1191,16 +1232,14 @@ def test_rls_suggest_kp_blends_conservatively() -> None:
 
     # Force a reliable, over-responsive estimate
     rls._K = -4.0
-    rls._P = 0.1     # low uncertainty → reliable
+    rls._P = 0.1  # low uncertainty → reliable
     rls._n_updates = 50
 
     assert rls.is_reliable
     suggested = rls.suggest_kp(current_kp=0.5, response_factor=1.0)
 
     # Expected: 0.8 * 0.5 + 0.2 * (1.0/4.0) = 0.40 + 0.05 = 0.45
-    assert abs(suggested - 0.45) < 0.02, (
-        f"Expected ~0.45, got {suggested:.4f}"
-    )
+    assert abs(suggested - 0.45) < 0.02, f"Expected ~0.45, got {suggested:.4f}"
     # Change is bounded to 20 % of the gap
     assert suggested < 0.5, "Kp should decrease for over-responsive system"
     assert suggested > 0.2, "Kp should not drop all the way to kp_opt in one call"

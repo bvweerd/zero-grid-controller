@@ -19,6 +19,14 @@ CONF_BATTERY_MAX_CHARGE_W = "battery_max_charge_w"
 CONF_BATTERY_MAX_DISCHARGE_W = "battery_max_discharge_w"
 CONF_BATTERY_CONTROL_ENABLED = "battery_control_enabled"
 CONF_BATTERY_SETPOINT_ENTITY = "battery_setpoint_entity"
+CONF_BATTERY_WRITE_THRESHOLD_W = "battery_write_threshold_w"
+CONF_BATTERY_VERIFICATION_MIN_W = "battery_verification_min_w"
+CONF_BATTERY_UNRESPONSIVE_THRESHOLD_W = "battery_unresponsive_threshold_w"
+CONF_BATTERY_UNRESPONSIVE_CYCLES = "battery_unresponsive_cycles"
+CONF_BATTERY_RESPONSE_EWM_ALPHA = "battery_response_ewm_alpha"
+CONF_BATTERY_HARD_RESET_RATIO = "battery_hard_reset_ratio"
+CONF_BATTERY_RECOVERY_BLEND = "battery_recovery_blend"
+CONF_BATTERY_CLIPPING_THRESHOLD = "battery_clipping_threshold"
 
 # Mode guard config
 CONF_MODE_GUARD_ENABLED = "mode_guard_enabled"
@@ -52,6 +60,9 @@ CONF_SETTLING_TIME_S = "settling_time_s"
 CONF_W_PER_UNIT = "w_per_unit"
 CONF_CALIBRATION_CONFIDENCE = "calibration_confidence"
 CONF_INVERTER_SPEED = "inverter_speed"  # "slow" | "normal" | "fast"
+CONF_ARRAY_CLIPPING_THRESHOLD = "array_clipping_threshold"
+CONF_CLOUD_SHADOW_PV_RATIO = "cloud_shadow_pv_ratio"
+CONF_CLOUD_SHADOW_MIN_GAP_W = "cloud_shadow_min_gap_w"
 
 # Switch config
 CONF_SWITCH_ON_THRESHOLD_W = "switch_on_threshold_w"
@@ -220,3 +231,12 @@ SENSOR_STALE_SECONDS = DEFAULT_SENSOR_STALE_S  # backward-compat alias
 # Configurable calibration safety limit
 CONF_CALIB_MAX_GRID_W = "calib_max_grid_w"
 DEFAULT_CALIB_MAX_GRID_W = CALIB_MAX_GRID_W  # 3000 W
+CONF_CALIB_STABLE_VARIANCE_PCT = "calib_stable_variance_pct"
+CONF_CALIB_STABLE_WINDOW_S = "calib_stable_window_s"
+CONF_CALIB_BASELINE_SAMPLES = "calib_baseline_samples"
+CONF_CALIB_SETTLING_CONFIRM_COUNT = "calib_settling_confirm_count"
+CONF_CALIB_SETTLING_THRESHOLD_W = "calib_settling_threshold_w"
+CONF_CALIB_MIN_PV_W = "calib_min_pv_w"
+CONF_CALIB_GRID_VARIANCE_FACTOR = "calib_grid_variance_factor"
+CONF_CALIB_INTER_ARRAY_SLEEP_S = "calib_inter_array_sleep_s"
+CONF_CALIB_PV_SENSOR_MAX_WAIT_S = "calib_pv_sensor_max_wait_s"
