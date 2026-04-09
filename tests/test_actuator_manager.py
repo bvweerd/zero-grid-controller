@@ -236,6 +236,34 @@ async def test_enter_safe_state_skips_disabled_array() -> None:
     write_sp.assert_not_called()
 
 
+async def test_enter_safe_state_continues_after_array_write_failure() -> None:
+    """A failing array write should not block later actuators in safe state."""
+    hass = _make_hass()
+    am = ActuatorManager(hass)
+    array_a = _make_array("A")
+    array_b = _make_array("B")
+    battery = _make_battery()
+    current_setpoints = {"A": 60.0, "B": 70.0}
+    current_battery_setpoints: dict[str, float | None] = {"Home Battery": 1000.0}
+    write_sp = AsyncMock(side_effect=[RuntimeError("boom"), None])
+    write_num = AsyncMock()
+
+    await am.enter_safe_state(
+        arrays=[array_a, array_b],
+        batteries=[battery],
+        current_setpoints=current_setpoints,
+        current_battery_setpoints=current_battery_setpoints,
+        write_setpoint=write_sp,
+        write_numeric_entity=write_num,
+    )
+
+    assert write_sp.await_count == 2
+    assert current_setpoints["A"] == 60.0
+    assert current_setpoints["B"] == array_b.setpoint_max
+    write_num.assert_awaited_once_with("number.battery_setpoint", 0.0)
+    assert current_battery_setpoints["Home Battery"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # apply_battery_targets
 # ---------------------------------------------------------------------------
@@ -317,6 +345,32 @@ async def test_apply_battery_targets_skips_below_threshold() -> None:
     write_num.assert_not_called()
 
 
+async def test_apply_battery_targets_write_error_skips_state_updates() -> None:
+    """Failed battery writes must not create settling or verification state."""
+    hass = _make_hass()
+    am = ActuatorManager(hass)
+    battery = _make_battery()
+    current_battery_setpoints: dict[str, float | None] = {"Home Battery": None}
+    settling: dict[str, float] = {}
+    verify_at: dict[str, tuple[float, float]] = {}
+    write_num = AsyncMock(side_effect=RuntimeError("boom"))
+
+    result = await am.apply_battery_targets(
+        targets={"Home Battery": -2000.0},
+        now=1000.0,
+        batteries=[battery],
+        current_battery_setpoints=current_battery_setpoints,
+        battery_settling_until=settling,
+        battery_verify_at=verify_at,
+        write_numeric_entity=write_num,
+    )
+
+    assert result == {}
+    assert current_battery_setpoints["Home Battery"] is None
+    assert settling == {}
+    assert verify_at == {}
+
+
 # ---------------------------------------------------------------------------
 # distribute_and_write
 # ---------------------------------------------------------------------------
@@ -382,6 +436,57 @@ async def test_distribute_and_write_respects_settling(hass) -> None:
     )
 
     write_sp.assert_not_called()
+
+
+async def test_distribute_and_write_cleans_expired_overrides_on_noop() -> None:
+    """Expired overrides should be removed even when no writes happen."""
+    hass = _make_hass()
+    am = ActuatorManager(hass)
+    overrides = {"South": (50.0, 10.0)}
+
+    result = await am.distribute_and_write(
+        delta_w=0.0,
+        now=20.0,
+        mode="active",
+        filtered_w=0.0,
+        arrays=[],
+        current_setpoints={},
+        settling_until={},
+        override_setpoints=overrides,
+        write_setpoint=AsyncMock(),
+        clamp_func=clamp,
+    )
+
+    assert result == {}
+    assert overrides == {}
+
+
+async def test_distribute_and_write_returns_switch_result_when_no_headroom() -> None:
+    """Switch hysteresis output should survive when numeric arrays have no headroom."""
+    hass = _make_hass()
+    am = ActuatorManager(hass)
+    array = _make_array("South", response_factor=1.0)
+    current_setpoints = {"South": array.setpoint_min}
+
+    with pytest.MonkeyPatch.context() as mp:
+        async def _switch_result(**kwargs):
+            return {"PV Switch": 1000.0}
+
+        mp.setattr(am, "apply_switch_hysteresis", _switch_result)
+        result = await am.distribute_and_write(
+            delta_w=200.0,
+            now=0.0,
+            mode="active",
+            filtered_w=200.0,
+            arrays=[array],
+            current_setpoints=current_setpoints,
+            settling_until={},
+            override_setpoints={},
+            write_setpoint=AsyncMock(),
+            clamp_func=clamp,
+        )
+
+    assert result == {"PV Switch": 1000.0}
 
 
 # ---------------------------------------------------------------------------
@@ -461,3 +566,26 @@ async def test_apply_switch_hysteresis_passive_mode_no_turn_on() -> None:
     )
 
     write_sp.assert_not_called()
+
+
+async def test_apply_switch_hysteresis_skips_override_and_debounce() -> None:
+    """Overrides and debounce windows should suppress switch writes."""
+    hass = _make_hass()
+    am = ActuatorManager(hass)
+    array = _make_array(output_type=OUTPUT_TYPE_SWITCH, switch_on_threshold_w=100.0)
+    current_setpoints = {"South": 0.0}
+    write_sp = AsyncMock()
+
+    await am.apply_switch_hysteresis(
+        now=10.0,
+        mode="active",
+        filtered_w=500.0,
+        arrays=[array],
+        current_setpoints=current_setpoints,
+        settling_until={"South": 20.0},
+        override_setpoints={"South": (50.0, 100.0)},
+        write_setpoint=write_sp,
+    )
+
+    write_sp.assert_not_called()
+    assert current_setpoints["South"] == 0.0

@@ -353,6 +353,15 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Step 2 for percent/watt arrays: setpoint range and inverter timing."""
         if user_input is not None:
+            errors = _validate_array_setpoint_range(user_input)
+            if errors:
+                return self.async_show_form(
+                    step_id="setpoint_range",
+                    data_schema=_array_setpoint_range_schema(
+                        {**self._draft, **user_input}
+                    ),
+                    errors=errors,
+                )
             self._draft.update(user_input)
             if self._reconfigure_mode:
                 return await self.async_step_recalibrate_option()
@@ -370,6 +379,15 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Step 2 for switch arrays: on/off thresholds and debounce."""
         if user_input is not None:
+            errors = _validate_array_switch_params(user_input)
+            if errors:
+                return self.async_show_form(
+                    step_id="switch_params",
+                    data_schema=_array_switch_params_schema(
+                        {**self._draft, **user_input}
+                    ),
+                    errors=errors,
+                )
             self._draft.update(user_input)
             if self._reconfigure_mode:
                 return await self.async_step_recalibrate_option()
@@ -578,6 +596,49 @@ def _validate_array_basics(user_input: dict[str, Any]) -> dict[str, str]:
     return errors
 
 
+def _validate_array_setpoint_range(user_input: dict[str, Any]) -> dict[str, str]:
+    """Validate cross-field constraints for numeric array outputs."""
+    errors: dict[str, str] = {}
+    setpoint_min = float(user_input.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN))
+    setpoint_max = float(user_input.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX))
+    if setpoint_min > setpoint_max:
+        errors[CONF_SETPOINT_MAX] = "max_less_than_min"
+    return errors
+
+
+def _validate_array_switch_params(user_input: dict[str, Any]) -> dict[str, str]:
+    """Validate cross-field constraints for switch arrays."""
+    errors: dict[str, str] = {}
+    switch_on_threshold = float(
+        user_input.get(CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W)
+    )
+    switch_off_threshold = float(
+        user_input.get(CONF_SWITCH_OFF_THRESHOLD_W, DEFAULT_SWITCH_OFF_THRESHOLD_W)
+    )
+    if switch_on_threshold <= switch_off_threshold:
+        errors[CONF_SWITCH_ON_THRESHOLD_W] = "must_exceed_off_threshold"
+    return errors
+
+
+def _extract_mode_guard_states(hass, entity_id: str) -> list[str]:
+    """Return usable mode-guard states for the selected entity."""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return []
+
+    options = state.attributes.get("options")
+    if isinstance(options, list):
+        usable_states = [str(option) for option in options if str(option).strip()]
+        if usable_states:
+            return usable_states
+
+    state_value = str(state.state).strip()
+    if state_value and state_value not in {"unknown", "unavailable"}:
+        return [state_value]
+
+    return []
+
+
 def _build_array_data(draft: dict[str, Any]) -> dict[str, Any]:
     speed = draft.get(CONF_INVERTER_SPEED, "normal")
     response_speed = draft.get("response_speed", "normal")
@@ -674,22 +735,28 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_mode_guard(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
             if user_input.get(CONF_MODE_GUARD_ENABLED):
-                self._data[CONF_MODE_GUARD_ENABLED] = True
-                self._data[CONF_MODE_GUARD_ENTITY] = user_input.get(
-                    CONF_MODE_GUARD_ENTITY
-                )
-                entity_id = user_input.get(CONF_MODE_GUARD_ENTITY, "")
-                state = self.hass.states.get(entity_id)
-                if state:
-                    options = state.attributes.get("options", [state.state])
-                    self._mode_guard_states = list(options)
-                self._data[CONF_MODE_GUARD_MAPPING] = {}
-                return await self.async_step_mode_mapping()
+                entity_id = str(user_input.get(CONF_MODE_GUARD_ENTITY, "")).strip()
+                if not entity_id:
+                    errors[CONF_MODE_GUARD_ENTITY] = "required"
+                else:
+                    mode_guard_states = _extract_mode_guard_states(self.hass, entity_id)
+                    if not mode_guard_states:
+                        errors[CONF_MODE_GUARD_ENTITY] = "invalid_mode_guard_entity"
+                    else:
+                        self._data[CONF_MODE_GUARD_ENABLED] = True
+                        self._data[CONF_MODE_GUARD_ENTITY] = entity_id
+                        self._mode_guard_states = mode_guard_states
+                        self._data[CONF_MODE_GUARD_MAPPING] = {}
+                        return await self.async_step_mode_mapping()
             else:
                 self._data[CONF_MODE_GUARD_ENABLED] = False
-            return await self.async_step_done()
+                self._mode_guard_states = []
+                self._data.pop(CONF_MODE_GUARD_ENTITY, None)
+                self._data.pop(CONF_MODE_GUARD_MAPPING, None)
+                return await self.async_step_done()
 
         return self.async_show_form(
             step_id="mode_guard",
@@ -701,6 +768,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                 }
             ),
+            errors=errors,
         )
 
     # --- Step 3: Mode mapping ---
@@ -708,6 +776,33 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
+            errors = {
+                state_val: "required"
+                for state_val in self._mode_guard_states
+                if state_val not in user_input
+            }
+            if errors:
+                schema_dict: dict[Any, Any] = {}
+                for state_val in self._mode_guard_states:
+                    schema_dict[
+                        vol.Required(
+                            state_val,
+                            default=user_input.get(state_val, "active"),
+                            description={"suggested_value": "active"},
+                        )
+                    ] = selector(
+                        {
+                            "select": {
+                                "options": ["active", "passive", "disabled"],
+                                "translation_key": "mode_guard_action",
+                            }
+                        }
+                    )
+                return self.async_show_form(
+                    step_id="mode_mapping",
+                    data_schema=vol.Schema(schema_dict),
+                    errors=errors,
+                )
             self._data[CONF_MODE_GUARD_MAPPING].update(user_input)
             return await self.async_step_done()
 

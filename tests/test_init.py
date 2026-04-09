@@ -13,6 +13,7 @@ from custom_components.zero_grid_controller import (
     _register_services,
     async_remove_config_entry_device,
     async_setup_entry,
+    async_unload_entry,
 )
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
@@ -154,6 +155,24 @@ async def test_update_listener_triggers_reload() -> None:
     await _async_update_listener(hass, entry)
 
     hass.config_entries.async_reload.assert_called_once_with("test_entry")
+
+
+async def test_update_listener_consumes_internal_update() -> None:
+    """Internal updates should live-reload config without reloading the entry."""
+    hass = MagicMock()
+    hass.config_entries.async_reload = AsyncMock()
+    coordinator = MagicMock()
+    coordinator.consume_internal_update.return_value = True
+    coordinator.reload_config = MagicMock()
+    entry = MagicMock()
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.coordinator = coordinator
+    entry.entry_id = "test_entry"
+
+    await _async_update_listener(hass, entry)
+
+    coordinator.reload_config.assert_called_once_with()
+    hass.config_entries.async_reload.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +449,62 @@ async def test_handle_override_setpoint_no_runtime() -> None:
     await handler(call)  # should not raise
 
 
+async def test_handle_override_setpoint_warns_when_array_not_found() -> None:
+    """Unknown arrays should emit a warning after all entries are checked."""
+    hass = _make_mock_hass()
+    _register_services(hass)
+
+    coordinator = MagicMock()
+    coordinator.async_override_setpoint = AsyncMock(side_effect=ValueError("missing"))
+
+    mock_entry = MagicMock()
+    mock_entry.runtime_data = MagicMock()
+    mock_entry.runtime_data.coordinator = coordinator
+    hass.config_entries.async_entries.return_value = [mock_entry]
+
+    call = MagicMock()
+    call.data = {"array_name": "PV Missing", "value": 75.0}
+
+    handler = hass._captured_handlers[SERVICE_OVERRIDE_SETPOINT]
+    with patch("custom_components.zero_grid_controller._LOGGER.warning") as warning:
+        await handler(call)
+
+    coordinator.async_override_setpoint.assert_awaited_once_with("PV Missing", 75.0)
+    warning.assert_called_once()
+
+
+async def test_handle_override_setpoint_continues_after_value_error() -> None:
+    """A ValueError in one entry should not block later matching entries."""
+    hass = _make_mock_hass()
+    _register_services(hass)
+
+    coordinator_1 = MagicMock()
+    coordinator_1.async_override_setpoint = AsyncMock(
+        side_effect=ValueError("missing")
+    )
+    coordinator_2 = MagicMock()
+    coordinator_2.async_override_setpoint = AsyncMock()
+
+    entry_1 = MagicMock()
+    entry_1.runtime_data = MagicMock()
+    entry_1.runtime_data.coordinator = coordinator_1
+    entry_2 = MagicMock()
+    entry_2.runtime_data = MagicMock()
+    entry_2.runtime_data.coordinator = coordinator_2
+    hass.config_entries.async_entries.return_value = [entry_1, entry_2]
+
+    call = MagicMock()
+    call.data = {"array_name": "PV West", "value": 75.0}
+
+    handler = hass._captured_handlers[SERVICE_OVERRIDE_SETPOINT]
+    with patch("custom_components.zero_grid_controller._LOGGER.warning") as warning:
+        await handler(call)
+
+    coordinator_1.async_override_setpoint.assert_awaited_once_with("PV West", 75.0)
+    coordinator_2.async_override_setpoint.assert_awaited_once_with("PV West", 75.0)
+    warning.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Test 17: async_setup_entry — subentries produce per-subentry device infos
 # ---------------------------------------------------------------------------
@@ -538,3 +613,55 @@ async def test_setup_entry_refreshes_before_platform_setup(hass: HomeAssistant) 
 
     assert result is True
     assert events == ["refresh", "forward"]
+
+
+async def test_setup_entry_refresh_failure_skips_platform_forwarding(
+    hass: HomeAssistant,
+) -> None:
+    """A failing first refresh should abort setup before platform forwarding."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_INVERT_SIGN: False,
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("sensor.grid_import", "0")
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new=AsyncMock(return_value=None),
+        ) as forward,
+        patch(
+            "custom_components.zero_grid_controller.ZeroGridCoordinator.async_config_entry_first_refresh",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="boom"):
+            await async_setup_entry(hass, entry)
+
+    forward.assert_not_called()
+
+
+async def test_async_unload_entry_failure_keeps_runtime_data(hass: HomeAssistant) -> None:
+    """Failed platform unload should not clear runtime_data or remove services."""
+    entry = MagicMock()
+    entry.entry_id = "entry_1"
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.coordinator = MagicMock()
+    entry.runtime_data.coordinator.async_shutdown = AsyncMock()
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=False)
+    hass.config_entries.async_entries = MagicMock(return_value=[entry])
+    with patch.object(type(hass.services), "async_remove") as async_remove:
+        result = await async_unload_entry(hass, entry)
+
+    assert result is False
+    entry.runtime_data.coordinator.async_shutdown.assert_awaited_once_with()
+    assert entry.runtime_data is not None
+    async_remove.assert_not_called()

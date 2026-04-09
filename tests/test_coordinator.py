@@ -16,9 +16,15 @@ from custom_components.zero_grid_controller.const import (
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
     CONF_INVERT_SIGN,
+    CONF_MODE_GUARD_ENABLED,
+    CONF_MODE_GUARD_ENTITY,
+    CONF_MODE_GUARD_MAPPING,
     CONF_OUTPUT_TYPE,
     CONF_SETPOINT_ENTITY,
     DOMAIN,
+    MODE_ACTIVE,
+    MODE_DISABLED,
+    MODE_PASSIVE,
     OUTPUT_TYPE_PERCENT,
 )
 from custom_components.zero_grid_controller.coordinator import ZeroGridCoordinator
@@ -173,6 +179,25 @@ async def test_read_grid_unavailable_returns_zero(hass: HomeAssistant) -> None:
     assert coordinator._read_grid() == 0.0
 
 
+async def test_read_grid_non_numeric_export_returns_import_only(
+    hass: HomeAssistant,
+) -> None:
+    """Invalid export values should degrade to 0 W instead of crashing."""
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_GRID_EXPORT_SENSORS: ["sensor.grid_export"],
+            CONF_INVERT_SIGN: False,
+        },
+    )
+    hass.states.async_set("sensor.grid_import", "300.0")
+    hass.states.async_set("sensor.grid_export", "bad")
+    coordinator = ZeroGridCoordinator(hass, entry)
+    assert coordinator._read_grid() == 300.0
+
+
 # ---------------------------------------------------------------------------
 # Test 7: apply_array_config_update changes array parameter
 # ---------------------------------------------------------------------------
@@ -309,6 +334,33 @@ async def test_reload_config_preserves_setpoints(hass: HomeAssistant) -> None:
     assert coordinator._current_setpoints.get("Roof South") == 65.0
 
 
+async def test_reload_config_drops_removed_array_runtime_state(
+    hass: HomeAssistant,
+) -> None:
+    """Reload should discard runtime state for arrays that no longer exist."""
+    entry = _make_entry(
+        hass,
+        subentries_data=[_array_subentry_data("Roof South"), _array_subentry_data("Roof East")],
+    )
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._current_setpoints["Roof South"] = 65.0
+    coordinator._current_setpoints["Roof East"] = 55.0
+    coordinator._settling_until["Roof South"] = 100.0
+    coordinator._settling_until["Roof East"] = 200.0
+
+    entry.subentries = {
+        subentry_id: subentry
+        for subentry_id, subentry in entry.subentries.items()
+        if subentry.data[CONF_ARRAY_NAME] == "Roof South"
+    }
+
+    coordinator.reload_config()
+
+    assert "Roof South" in coordinator._current_setpoints
+    assert "Roof East" not in coordinator._current_setpoints
+    assert "Roof East" not in coordinator._settling_until
+
+
 # ---------------------------------------------------------------------------
 # Test 16: set_ewm_alpha updates the filter coefficient
 # ---------------------------------------------------------------------------
@@ -367,6 +419,14 @@ async def test_read_grid_w_unavailable(hass: HomeAssistant) -> None:
     """read_grid_w returns None when import sensor is unavailable."""
     entry = _make_entry(hass)
     hass.states.async_set("sensor.grid_import", "unavailable")
+    coordinator = ZeroGridCoordinator(hass, entry)
+    assert coordinator.read_grid_w() is None
+
+
+async def test_read_grid_w_non_numeric_returns_none(hass: HomeAssistant) -> None:
+    """Public grid reads should reject invalid numeric sensor states."""
+    entry = _make_entry(hass)
+    hass.states.async_set("sensor.grid_import", "bad")
     coordinator = ZeroGridCoordinator(hass, entry)
     assert coordinator.read_grid_w() is None
 
@@ -473,3 +533,71 @@ async def test_concurrent_calibration_guard(hass: HomeAssistant) -> None:
 
     with _contextlib.suppress(_asyncio.CancelledError):
         await coordinator._calibration_task
+
+
+async def test_resolve_mode_missing_entity_disables(hass: HomeAssistant) -> None:
+    """Mode guard should disable control when the configured entity is missing."""
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.optimizer",
+            CONF_MODE_GUARD_MAPPING: {"home": MODE_PASSIVE},
+        },
+    )
+    coordinator = ZeroGridCoordinator(hass, entry)
+    assert coordinator._resolve_mode() == MODE_DISABLED
+
+
+async def test_resolve_mode_invalid_mapping_falls_back_to_active(
+    hass: HomeAssistant,
+) -> None:
+    """Unexpected mapping values should fall back to active mode."""
+    entry = _make_entry(
+        hass,
+        data={
+            "name": "Test ZGC",
+            CONF_GRID_IMPORT_SENSORS: ["sensor.grid_import"],
+            CONF_INVERT_SIGN: False,
+            CONF_MODE_GUARD_ENABLED: True,
+            CONF_MODE_GUARD_ENTITY: "input_select.optimizer",
+            CONF_MODE_GUARD_MAPPING: {"home": "unsupported"},
+        },
+    )
+    hass.states.async_set(
+        "input_select.optimizer", "home", {"options": ["home"]}
+    )
+    coordinator = ZeroGridCoordinator(hass, entry)
+    assert coordinator._resolve_mode() == MODE_ACTIVE
+
+
+async def test_persist_battery_response_factors_skips_when_unchanged(
+    hass: HomeAssistant,
+) -> None:
+    """Battery response factors should not persist again without changes."""
+    subentry = {
+        "subentry_type": "battery",
+        "title": "Home Battery",
+        "data": {
+            "name": "Home Battery",
+            "battery_sensor": "sensor.battery_power",
+            "battery_max_charge_w": 3000.0,
+            "battery_max_discharge_w": 3000.0,
+            "battery_control_enabled": True,
+            "battery_setpoint_entity": "number.battery_setpoint",
+        },
+        "unique_id": None,
+    }
+    entry = _make_entry(hass, subentries_data=[subentry])
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    with patch.object(hass.config_entries, "async_update_entry") as update_entry:
+        coordinator._persist_battery_response_factors(100.0)
+        update_entry.assert_called_once()
+
+        update_entry.reset_mock()
+        coordinator._persist_battery_response_factors(200.0)
+        update_entry.assert_not_called()

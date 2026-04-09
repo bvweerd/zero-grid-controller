@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -320,6 +320,24 @@ async def test_switch_turn_off() -> None:
     switch.async_write_ha_state.assert_called_once()
 
 
+async def test_switch_turn_on_propagates_update_failure() -> None:
+    """Failed switch updates should not write HA state."""
+    coordinator = _make_coordinator(array=_make_array(enabled=False))
+    coordinator.async_update_array_config = AsyncMock(side_effect=ValueError("missing"))
+    entry = _make_entry()
+    device = MagicMock()
+    switch = ZGCArrayEnableSwitch(
+        coordinator, entry, device, "subentry_1", "test_array"
+    )
+    switch.hass = MagicMock()
+    switch.async_write_ha_state = MagicMock()
+
+    with pytest.raises(ValueError, match="missing"):
+        await switch.async_turn_on()
+
+    switch.async_write_ha_state.assert_not_called()
+
+
 def test_switch_is_on_no_array() -> None:
     """is_on returns True when get_array returns None (default safe state)."""
     coordinator = _make_coordinator(array=None)
@@ -329,6 +347,25 @@ def test_switch_is_on_no_array() -> None:
         coordinator, entry, device, "subentry_1", "missing_array"
     )
     assert switch.is_on is True
+
+
+async def test_array_settling_time_write_propagates_missing_array() -> None:
+    """Per-array number writes should fail loudly when the array no longer exists."""
+    coordinator = _make_coordinator(array=None)
+    coordinator.async_update_array_config = AsyncMock(
+        side_effect=ValueError("Unknown array")
+    )
+    entry = _make_entry()
+    device = MagicMock()
+    number = ZGCArraySettlingTimeNumber(
+        coordinator, entry, device, "subentry_1", "missing_array"
+    )
+    number.async_write_ha_state = MagicMock()
+
+    with pytest.raises(ValueError, match="Unknown array"):
+        await number.async_set_native_value(30)
+
+    number.async_write_ha_state.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
