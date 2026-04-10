@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.issue_registry import IssueSeverity
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .actuator_manager import ActuatorManager
@@ -88,12 +90,25 @@ from .const import (
 from .control_observer import ControlObserver
 from .estimator import RLSEstimator
 from .pid import PIDController
-from .repairs import dismiss_grid_sensor_unavailable, raise_grid_sensor_unavailable
+from .repairs import (
+    ISSUE_ARRAY_CONFIGURATION_PROBLEM,
+    ISSUE_BATTERY_UNRESPONSIVE,
+    ISSUE_CALIBRATION_NOT_CONVERGING,
+    ISSUE_GRID_SENSOR_STALE,
+    ISSUE_GRID_SENSOR_UNAVAILABLE,
+    ISSUE_MODE_GUARD_INVALID_STATE,
+    ISSUE_SAFE_STATE_ACTIVE,
+    create_issue,
+    dismiss_issue,
+    issue_id,
+)
 from .utils import clamp
 
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
+CONTROL_CYCLE_LOG_MAXLEN = 180
+EVENT_LOG_MAXLEN = 120
 
 
 @dataclass
@@ -269,11 +284,30 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._override_setpoints: dict[
             str, tuple[float, float]
         ] = {}  # name -> (value, expires_at)
-        self._grid_unavailable_reported: bool = False
         self._controller_enabled: bool = bool(data.get(CONF_CONTROLLER_ENABLED, True))
         self._suppress_reload_once: bool = False
         self._last_estimator_persist: float = 0.0
         self._safe_state_applied: bool = False
+        self._last_health_snapshot: dict[str, Any] = {}
+        self._last_grid_input_health: list[dict[str, Any]] = []
+        self._control_cycle_count: int = 0
+        self._control_cycle_log: deque[dict[str, Any]]
+        if not hasattr(self, "_control_cycle_log"):
+            self._control_cycle_log = deque(maxlen=CONTROL_CYCLE_LOG_MAXLEN)
+        self._sensor_health_log: deque[dict[str, Any]]
+        if not hasattr(self, "_sensor_health_log"):
+            self._sensor_health_log = deque(maxlen=EVENT_LOG_MAXLEN)
+        self._battery_response_log: deque[dict[str, Any]]
+        if not hasattr(self, "_battery_response_log"):
+            self._battery_response_log = deque(maxlen=EVENT_LOG_MAXLEN)
+        self._repair_event_log: deque[dict[str, Any]]
+        if not hasattr(self, "_repair_event_log"):
+            self._repair_event_log = deque(maxlen=EVENT_LOG_MAXLEN)
+        self._calibration_log: deque[dict[str, Any]]
+        if not hasattr(self, "_calibration_log"):
+            self._calibration_log = deque(maxlen=EVENT_LOG_MAXLEN)
+        if not hasattr(self, "_active_repair_issue_ids"):
+            self._active_repair_issue_ids: set[str] = set()
         # Calibration task tracking — initialised once here, not reset by reload_config
         if not hasattr(self, "_calibration_task"):
             self._calibration_task: asyncio.Task[None] | None = None
@@ -309,6 +343,116 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         for name, t in old_battery_settling.items():
             if any(b.name == name for b in self._batteries):
                 self._battery_settling_until[name] = t
+
+    def _now_iso(self) -> str:
+        """Return the current UTC time as ISO string."""
+        return datetime.now(UTC).isoformat()
+
+    def _append_event(self, log: deque[dict[str, Any]], event: dict[str, Any]) -> None:
+        """Append a JSON-safe event with a timestamp."""
+        log.append({"timestamp": self._now_iso(), **event})
+
+    def _log_sensor_health_event(
+        self,
+        entity_id: str,
+        role: str,
+        status: str,
+        *,
+        age_s: float | None = None,
+    ) -> None:
+        """Track sensor health transitions for diagnostics."""
+        event: dict[str, Any] = {
+            "entity_id": entity_id,
+            "role": role,
+            "status": status,
+        }
+        if age_s is not None:
+            event["age_s"] = round(age_s, 1)
+        self._append_event(self._sensor_health_log, event)
+
+    def _log_battery_response_event(
+        self,
+        battery_name: str,
+        *,
+        commanded_w: float,
+        actual_w: float,
+        response_factor: float,
+        state: str,
+    ) -> None:
+        """Track battery verification events for diagnostics."""
+        self._append_event(
+            self._battery_response_log,
+            {
+                "battery": battery_name,
+                "commanded_w": round(commanded_w, 3),
+                "actual_w": round(actual_w, 3),
+                "response_factor": round(response_factor, 4),
+                "state": state,
+            },
+        )
+
+    def _log_repair_event(
+        self,
+        action: str,
+        issue_key: str,
+        full_issue_id: str,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Track repair lifecycle events for diagnostics."""
+        event: dict[str, Any] = {
+            "action": action,
+            "issue_key": issue_key,
+            "issue_id": full_issue_id,
+        }
+        if context:
+            event["context"] = context
+        self._append_event(self._repair_event_log, event)
+
+    def _log_calibration_event(
+        self, array_name: str, status: str, **details: Any
+    ) -> None:
+        """Track calibration-related events for diagnostics."""
+        self._append_event(
+            self._calibration_log,
+            {"array": array_name, "status": status, **details},
+        )
+
+    def _sync_repair_issue(
+        self,
+        *,
+        active: bool,
+        issue_key: str,
+        suffix: str | None = None,
+        placeholders: dict[str, str] | None = None,
+        severity: IssueSeverity = IssueSeverity.ERROR,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Create or dismiss a repair issue only on state transitions."""
+        full_issue_id = issue_id(issue_key, suffix)
+        if active:
+            if full_issue_id in self._active_repair_issue_ids:
+                return
+            create_issue(
+                self.hass,
+                issue_key,
+                suffix=suffix,
+                placeholders=placeholders,
+                severity=severity,
+            )
+            self._active_repair_issue_ids.add(full_issue_id)
+            self._log_repair_event(
+                "create", issue_key, full_issue_id, context=context or placeholders
+            )
+            return
+
+        if full_issue_id not in self._active_repair_issue_ids:
+            return
+        dismiss_issue(self.hass, issue_key, suffix=suffix)
+        self._active_repair_issue_ids.discard(full_issue_id)
+        self._log_repair_event(
+            "dismiss", issue_key, full_issue_id, context=context or placeholders
+        )
 
     def set_ewm_alpha(self, value: float) -> None:
         """Update the EWM filter smoothing coefficient live."""
@@ -442,6 +586,352 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 translation_placeholders={"error": str(err)},
             ) from err
 
+    def _evaluate_grid_inputs(self) -> list[dict[str, Any]]:
+        """Return current health information for configured grid sensors."""
+        health: list[dict[str, Any]] = []
+        for role, entity_ids in (
+            ("import", self._import_sensors),
+            ("export", self._export_sensors),
+        ):
+            for entity_id in entity_ids:
+                state = self.hass.states.get(entity_id)
+                age_s: float | None = None
+                if state is not None:
+                    last_updated = getattr(state, "last_updated", None)
+                    if last_updated is not None:
+                        age_s = (datetime.now(UTC) - last_updated).total_seconds()
+                available = state is not None and state.state not in (
+                    "unknown",
+                    "unavailable",
+                )
+                fresh = available and self._is_state_fresh(
+                    entity_id, self._sensor_stale_s
+                )
+                is_numeric = False
+                if available:
+                    with contextlib.suppress(ValueError, TypeError):
+                        float(state.state)
+                        is_numeric = True
+                if not available:
+                    status = "unavailable"
+                elif not fresh:
+                    status = "stale"
+                elif not is_numeric:
+                    status = "non_numeric"
+                else:
+                    status = "ok"
+                health.append(
+                    {
+                        "entity_id": entity_id,
+                        "role": role,
+                        "status": status,
+                        "available": available,
+                        "fresh": fresh,
+                        "is_numeric": is_numeric,
+                        "value": None if state is None else state.state,
+                        "age_s": None if age_s is None else round(age_s, 1),
+                    }
+                )
+        return health
+
+    def _evaluate_mode_guard_health(self) -> dict[str, Any]:
+        """Return mode-guard status information for diagnostics and repairs."""
+        if not self._mode_guard_enabled:
+            return {"enabled": False, "status": "disabled"}
+        if not self._mode_guard_entity:
+            return {
+                "enabled": True,
+                "status": "misconfigured",
+                "mapped_mode": MODE_DISABLED,
+            }
+
+        state = self.hass.states.get(self._mode_guard_entity)
+        if state is None:
+            return {
+                "enabled": True,
+                "entity_id": self._mode_guard_entity,
+                "status": "missing",
+                "mapped_mode": MODE_DISABLED,
+            }
+        if state.state in ("unknown", "unavailable"):
+            return {
+                "enabled": True,
+                "entity_id": self._mode_guard_entity,
+                "status": "unavailable",
+                "state": state.state,
+                "mapped_mode": MODE_DISABLED,
+            }
+        if not self._is_state_fresh(self._mode_guard_entity, self._sensor_stale_s):
+            return {
+                "enabled": True,
+                "entity_id": self._mode_guard_entity,
+                "status": "stale",
+                "state": state.state,
+                "mapped_mode": MODE_DISABLED,
+            }
+        mapped = self._mode_guard_mapping.get(state.state)
+        if mapped is None:
+            return {
+                "enabled": True,
+                "entity_id": self._mode_guard_entity,
+                "status": "unmapped",
+                "state": state.state,
+                "mapped_mode": MODE_ACTIVE,
+            }
+        return {
+            "enabled": True,
+            "entity_id": self._mode_guard_entity,
+            "status": "ok",
+            "state": state.state,
+            "mapped_mode": mapped,
+        }
+
+    def _evaluate_array_configuration(self) -> list[dict[str, Any]]:
+        """Return configuration problems that can be detected locally."""
+        problems: list[dict[str, Any]] = []
+        for array in self._arrays:
+            if array.setpoint_min > array.setpoint_max:
+                problems.append(
+                    {
+                        "array": array.name,
+                        "problem": "setpoint_range_invalid",
+                        "details": f"min {array.setpoint_min} > max {array.setpoint_max}",
+                    }
+                )
+            if (
+                array.output_type == OUTPUT_TYPE_SWITCH
+                and array.switch_on_threshold_w <= 0
+            ):
+                problems.append(
+                    {
+                        "array": array.name,
+                        "problem": "switch_threshold_invalid",
+                        "details": "switch_on_threshold_w must be > 0",
+                    }
+                )
+        for battery in self._batteries:
+            if battery.control_enabled and not battery.setpoint_entity:
+                problems.append(
+                    {
+                        "battery": battery.name,
+                        "problem": "missing_setpoint_entity",
+                        "details": "battery control is enabled without a setpoint entity",
+                    }
+                )
+        return problems
+
+    def _evaluate_batteries(self, now: float) -> list[dict[str, Any]]:
+        """Return battery state and health details."""
+        batteries: list[dict[str, Any]] = []
+        for battery in self._batteries:
+            actual_w = self._read_sensor_safe(battery.sensor_entity, 0.0)
+            batteries.append(
+                {
+                    "name": battery.name,
+                    "subentry_id": battery.subentry_id,
+                    "control_enabled": battery.control_enabled,
+                    "setpoint_entity": battery.setpoint_entity,
+                    "sensor_entity": battery.sensor_entity,
+                    "max_charge_w": battery.max_charge_w,
+                    "max_discharge_w": battery.max_discharge_w,
+                    "current_setpoint_w": self._current_battery_setpoints.get(
+                        battery.name
+                    ),
+                    "current_power_w": actual_w,
+                    "measured_response_factor": battery.measured_response_factor,
+                    "unresponsive": battery.is_unresponsive(),
+                    "unresponsive_count": getattr(battery, "_unresponsive_count", 0),
+                    "settling_remaining_s": round(
+                        max(
+                            0.0,
+                            self._battery_settling_until.get(battery.name, 0.0) - now,
+                        ),
+                        1,
+                    ),
+                    "verify_pending": battery.name in self._battery_verify_at,
+                    "verification_min_w": battery.verification_min_w,
+                    "unresponsive_threshold_w": battery.unresponsive_threshold_w,
+                }
+            )
+        return batteries
+
+    def _evaluate_calibration_health(self) -> dict[str, Any]:
+        """Return estimator/calibration health summary."""
+        non_switch_arrays = [
+            a for a in self._arrays if a.output_type != OUTPUT_TYPE_SWITCH
+        ]
+        reliable = [
+            array.name
+            for array in non_switch_arrays
+            if (est := self._estimators.get(array.name)) is not None and est.is_reliable
+        ]
+        not_reliable = [
+            array.name for array in non_switch_arrays if array.name not in reliable
+        ]
+        issue_active = (
+            bool(non_switch_arrays)
+            and self._control_cycle_count >= 60
+            and not self.is_calibrating
+            and bool(not_reliable)
+        )
+        return {
+            "is_calibrating": self.is_calibrating,
+            "reliable_arrays": reliable,
+            "unreliable_arrays": not_reliable,
+            "issue_active": issue_active,
+        }
+
+    def _build_health_snapshot(self, result: ZGCResult, now: float) -> dict[str, Any]:
+        """Assemble a health snapshot for diagnostics and repair evaluation."""
+        grid_inputs = self._evaluate_grid_inputs()
+        previous = {
+            item["entity_id"]: item["status"] for item in self._last_grid_input_health
+        }
+        for item in grid_inputs:
+            if previous.get(item["entity_id"]) != item["status"]:
+                self._log_sensor_health_event(
+                    item["entity_id"],
+                    item["role"],
+                    item["status"],
+                    age_s=item["age_s"],
+                )
+        self._last_grid_input_health = grid_inputs
+
+        batteries = self._evaluate_batteries(now)
+        mode_guard = self._evaluate_mode_guard_health()
+        calibration = self._evaluate_calibration_health()
+        config_problems = self._evaluate_array_configuration()
+        active_repairs = sorted(self._active_repair_issue_ids)
+        return {
+            "controller_enabled": self._controller_enabled,
+            "safe_state_applied": self._safe_state_applied,
+            "mode": result.mode,
+            "status": result.status,
+            "grid_inputs_ok": all(item["status"] == "ok" for item in grid_inputs),
+            "grid_inputs": grid_inputs,
+            "mode_guard": mode_guard,
+            "batteries": batteries,
+            "calibration": calibration,
+            "config_problems": config_problems,
+            "active_repairs": active_repairs,
+        }
+
+    def _update_repair_issues(self, health: dict[str, Any]) -> None:
+        """Synchronize repair issues with the current health snapshot."""
+        grid_inputs = health["grid_inputs"]
+        unavailable = [
+            item
+            for item in grid_inputs
+            if item["status"] in {"unavailable", "non_numeric"}
+        ]
+        stale = [item for item in grid_inputs if item["status"] == "stale"]
+        self._sync_repair_issue(
+            active=bool(unavailable),
+            issue_key=ISSUE_GRID_SENSOR_UNAVAILABLE,
+            placeholders={
+                "sensors": ", ".join(item["entity_id"] for item in unavailable)
+            },
+        )
+        self._sync_repair_issue(
+            active=bool(stale),
+            issue_key=ISSUE_GRID_SENSOR_STALE,
+            placeholders={"sensors": ", ".join(item["entity_id"] for item in stale)},
+            severity=IssueSeverity.WARNING,
+        )
+
+        mode_guard = health["mode_guard"]
+        mode_guard_invalid = (
+            mode_guard.get("enabled") and mode_guard.get("status") != "ok"
+        )
+        self._sync_repair_issue(
+            active=bool(mode_guard_invalid),
+            issue_key=ISSUE_MODE_GUARD_INVALID_STATE,
+            placeholders={
+                "entity": str(mode_guard.get("entity_id") or "not_configured"),
+                "state": str(mode_guard.get("state") or mode_guard.get("status")),
+            },
+            severity=IssueSeverity.WARNING,
+        )
+
+        self._sync_repair_issue(
+            active=health["safe_state_applied"],
+            issue_key=ISSUE_SAFE_STATE_ACTIVE,
+            placeholders={"status": str(health["status"])},
+            severity=IssueSeverity.WARNING,
+        )
+
+        for battery in self._batteries:
+            self._sync_repair_issue(
+                active=battery.is_unresponsive(),
+                issue_key=ISSUE_BATTERY_UNRESPONSIVE,
+                suffix=battery.name,
+                placeholders={"battery": battery.name},
+                severity=IssueSeverity.WARNING,
+            )
+
+        problems = health["config_problems"]
+        for battery in self._batteries:
+            active = any(problem.get("battery") == battery.name for problem in problems)
+            self._sync_repair_issue(
+                active=active,
+                issue_key=ISSUE_ARRAY_CONFIGURATION_PROBLEM,
+                suffix=f"battery_{battery.name}",
+                placeholders={"target": battery.name},
+                severity=IssueSeverity.WARNING,
+            )
+        for array in self._arrays:
+            active = any(problem.get("array") == array.name for problem in problems)
+            self._sync_repair_issue(
+                active=active,
+                issue_key=ISSUE_ARRAY_CONFIGURATION_PROBLEM,
+                suffix=f"array_{array.name}",
+                placeholders={"target": array.name},
+                severity=IssueSeverity.WARNING,
+            )
+
+        calibration = health["calibration"]
+        self._sync_repair_issue(
+            active=calibration["issue_active"],
+            issue_key=ISSUE_CALIBRATION_NOT_CONVERGING,
+            placeholders={
+                "arrays": ", ".join(calibration["unreliable_arrays"]) or "none",
+            },
+            severity=IssueSeverity.WARNING,
+        )
+
+    def _log_control_cycle(self, result: ZGCResult) -> None:
+        """Store a compact per-cycle control log for diagnostics."""
+        self._control_cycle_count += 1
+        self._append_event(
+            self._control_cycle_log,
+            {
+                "cycle": self._control_cycle_count,
+                "mode": result.mode,
+                "status": result.status,
+                "grid_raw_w": round(result.grid_raw_w, 3),
+                "grid_filtered_w": round(result.grid_filtered_w, 3),
+                "residual_w": round(result.residual_w, 3),
+                "pid_output_w": round(result.pid_output_w, 3),
+                "pid_p_w": round(result.pid_p_w, 3),
+                "pid_i_w": round(result.pid_i_w, 3),
+                "pid_d_w": round(result.pid_d_w, 3),
+                "battery_clipping": result.battery_clipping,
+                "safe_state_applied": self._safe_state_applied,
+                "setpoints": dict(result.setpoints),
+                "battery_setpoints": dict(result.battery_setpoints),
+                "battery_unresponsive": dict(result.battery_unresponsive),
+            },
+        )
+
+    def _finalize_result(self, result: ZGCResult, now: float) -> ZGCResult:
+        """Finalize diagnostics bookkeeping before returning coordinator data."""
+        self._log_control_cycle(result)
+        health = self._build_health_snapshot(result, now)
+        self._update_repair_issues(health)
+        health["active_repairs"] = sorted(self._active_repair_issue_ids)
+        self._last_health_snapshot = health
+        return result
+
     async def _run_control_loop(self, dt: float, now: float) -> ZGCResult:
         # --- 0. Battery response verification (runs every cycle regardless of mode) ---
         battery_unresponsive = self._verify_battery_responses(now)
@@ -452,30 +942,29 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             _LOGGER.debug("Controller is disabled, skipping control loop")
             self._pid.reset()
             await self.async_enter_safe_state()
-            return self._make_result(
-                0.0,
-                MODE_DISABLED,
-                STATUS_DISABLED,
-                battery_unresponsive=battery_unresponsive,
+            return self._finalize_result(
+                self._make_result(
+                    0.0,
+                    MODE_DISABLED,
+                    STATUS_DISABLED,
+                    battery_unresponsive=battery_unresponsive,
+                ),
+                now,
             )
 
-        # --- Repair issue tracking ---
+        # --- Grid input validation ---
         if self._is_grid_sensor_unavailable():
-            if not self._grid_unavailable_reported:
-                raise_grid_sensor_unavailable(self.hass)
-                self._grid_unavailable_reported = True
             self._pid.reset()
             await self.async_enter_safe_state()
-            return self._make_result(
-                0.0,
-                MODE_DISABLED,
-                STATUS_DISABLED,
-                battery_unresponsive=battery_unresponsive,
+            return self._finalize_result(
+                self._make_result(
+                    0.0,
+                    MODE_DISABLED,
+                    STATUS_DISABLED,
+                    battery_unresponsive=battery_unresponsive,
+                ),
+                now,
             )
-        else:
-            if self._grid_unavailable_reported:
-                dismiss_grid_sensor_unavailable(self.hass)
-                self._grid_unavailable_reported = False
 
         # --- 1. Read & normalise grid measurement ---
         raw_w = self._read_grid()
@@ -495,11 +984,14 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         if mode == MODE_DISABLED:
             self._pid.reset()
             await self.async_enter_safe_state()
-            return self._make_result(
-                raw_w,
-                MODE_DISABLED,
-                STATUS_DISABLED,
-                battery_unresponsive=battery_unresponsive,
+            return self._finalize_result(
+                self._make_result(
+                    raw_w,
+                    MODE_DISABLED,
+                    STATUS_DISABLED,
+                    battery_unresponsive=battery_unresponsive,
+                ),
+                now,
             )
 
         self._safe_state_applied = False
@@ -521,13 +1013,16 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         # --- 6. Deadband on residual (no PV action needed) ---
         if abs(residual_w) < self._deadband_w:
             self._pid.freeze_integrator()
-            return self._make_result(
-                raw_w,
-                mode,
-                STATUS_DEADBAND,
-                battery_setpoints=battery_setpoints,
-                residual_w=residual_w,
-                battery_unresponsive=battery_unresponsive,
+            return self._finalize_result(
+                self._make_result(
+                    raw_w,
+                    mode,
+                    STATUS_DEADBAND,
+                    battery_setpoints=battery_setpoints,
+                    residual_w=residual_w,
+                    battery_unresponsive=battery_unresponsive,
+                ),
+                now,
             )
 
         # --- 7. Clipping & cloud-shadow detection ---
@@ -541,13 +1036,16 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         )
         if observation.cloud_shadow:
             self._pid.freeze_integrator()
-            return self._make_result(
-                raw_w,
-                mode,
-                STATUS_CLOUD_SHADOW,
-                battery_setpoints=battery_setpoints,
-                residual_w=residual_w,
-                battery_unresponsive=battery_unresponsive,
+            return self._finalize_result(
+                self._make_result(
+                    raw_w,
+                    mode,
+                    STATUS_CLOUD_SHADOW,
+                    battery_setpoints=battery_setpoints,
+                    residual_w=residual_w,
+                    battery_unresponsive=battery_unresponsive,
+                ),
+                now,
             )
 
         # --- 8. Freeze integrator until the longest-settling PV correction lands ---
@@ -582,14 +1080,17 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         else:
             status = STATUS_ACTIVE
 
-        return self._make_result(
-            raw_w,
-            mode,
-            status,
-            observation.battery_clipping,
-            battery_setpoints,
-            residual_w,
-            battery_unresponsive=battery_unresponsive,
+        return self._finalize_result(
+            self._make_result(
+                raw_w,
+                mode,
+                status,
+                observation.battery_clipping,
+                battery_setpoints,
+                residual_w,
+                battery_unresponsive=battery_unresponsive,
+            ),
+            now,
         )
 
     # ------------------------------------------------------------------
@@ -812,6 +1313,13 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
             if abs(commanded_w) < battery.verification_min_w:
                 result[name] = battery.is_unresponsive()
+                self._log_battery_response_event(
+                    name,
+                    commanded_w=commanded_w,
+                    actual_w=0.0,
+                    response_factor=battery.measured_response_factor,
+                    state="skipped_small_command",
+                )
                 continue
 
             actual_w = self._read_sensor_safe(battery.sensor_entity, 0.0)
@@ -840,6 +1348,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 commanded_w,
                 actual_w,
                 battery.measured_response_factor,
+            )
+            response_state = "unresponsive" if now_unresponsive else "ok"
+            if was_unresponsive and not now_unresponsive:
+                response_state = "recovered"
+            elif not was_unresponsive and now_unresponsive:
+                response_state = "became_unresponsive"
+            self._log_battery_response_event(
+                name,
+                commanded_w=commanded_w,
+                actual_w=actual_w,
+                response_factor=battery.measured_response_factor,
+                state=response_state,
             )
             result[name] = now_unresponsive
 
@@ -1062,6 +1582,36 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         return self._safe_state_applied
 
     @property
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return the latest aggregated health snapshot."""
+        return dict(self._last_health_snapshot)
+
+    @property
+    def control_cycle_log(self) -> list[dict[str, Any]]:
+        """Return the recent per-cycle diagnostics log."""
+        return list(self._control_cycle_log)
+
+    @property
+    def sensor_health_log(self) -> list[dict[str, Any]]:
+        """Return recent sensor health transitions."""
+        return list(self._sensor_health_log)
+
+    @property
+    def battery_response_log(self) -> list[dict[str, Any]]:
+        """Return recent battery verification events."""
+        return list(self._battery_response_log)
+
+    @property
+    def repair_event_log(self) -> list[dict[str, Any]]:
+        """Return recent repair issue create/dismiss events."""
+        return list(self._repair_event_log)
+
+    @property
+    def calibration_log(self) -> list[dict[str, Any]]:
+        """Return recent calibration events."""
+        return list(self._calibration_log)
+
+    @property
     def is_calibrating(self) -> bool:
         """Return True while a calibration task is running."""
         return self._calibration_task is not None and not self._calibration_task.done()
@@ -1079,6 +1629,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         if self.is_calibrating:
             _LOGGER.warning("Calibration already in progress — ignoring new request")
             return False
+        for array in arrays:
+            self._log_calibration_event(array.name, "started")
         self._calibration_task = self.hass.async_create_task(
             self._async_calibration_wrapper(arrays, progress_callback)
         )
@@ -1110,12 +1662,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 calib_pv_sensor_max_wait_s=self._calib_pv_sensor_max_wait_s,
             )
             await self.async_apply_calibration_results(results)
+            for array_name in results:
+                self._log_calibration_event(array_name, "applied")
         except asyncio.CancelledError:
             _LOGGER.info("Calibration cancelled (integration unloading or new request)")
             calibrator.abort()
+            for array in arrays:
+                self._log_calibration_event(array.name, "cancelled")
             raise
         except Exception as err:
             _LOGGER.error("Calibration failed with unexpected error: %s", err)
+            for array in arrays:
+                self._log_calibration_event(array.name, "failed", error=str(err))
 
     async def _calibration_write_setpoint(
         self, array: ArrayConfig, value: float
@@ -1177,6 +1735,11 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             updates: dict[str, Any] = {
                 "calibration_confidence": result.confidence,
             }
+            self._log_calibration_event(
+                array_name,
+                "result",
+                confidence=result.confidence,
+            )
             if array.output_type != OUTPUT_TYPE_SWITCH:
                 updates.update(
                     {

@@ -275,7 +275,31 @@
   "issues": {
     "grid_sensor_unavailable": {
       "title": "Gridsensor niet beschikbaar",
-      "description": "Een of meer grid importsensoren zijn niet beschikbaar. Zero Grid Controller kan niet functioneren zonder een geldige gridmeting. Controleer of de sensoren correct zijn geconfigureerd en of de integraties die ze leveren actief zijn."
+      "description": "Een of meer gridsensoren zijn niet beschikbaar of leveren geen numerieke waarden: {sensors}. Zero Grid Controller kan niet functioneren zonder een geldige gridmeting. Controleer of de sensoren correct zijn geconfigureerd en of de integraties die ze leveren actief zijn."
+    },
+    "grid_sensor_stale": {
+      "title": "Gridsensor verouderd",
+      "description": "Een of meer gridsensoren worden niet snel genoeg bijgewerkt voor closed-loop regeling: {sensors}. Controleer de bronintegratie en de ingestelde versheidsdrempel."
+    },
+    "battery_unresponsive": {
+      "title": "Batterij volgt commando's niet",
+      "description": "Batterij {battery} haalt herhaaldelijk het gevraagde vermogen niet. Controleer de tekenconventie, de setpoint-entiteit, de settlingtijd en de batterijbeschikbaarheid."
+    },
+    "safe_state_active": {
+      "title": "Controller staat in veilige toestand",
+      "description": "Zero Grid Controller heeft de fail-safe toestand toegepast (huidige status: {status}) omdat normale regeling momenteel geblokkeerd is. Bekijk de diagnostics en actieve reparatieproblemen."
+    },
+    "mode_guard_invalid_state": {
+      "title": "Mode-guard invoer is ongeldig",
+      "description": "De geconfigureerde mode-guard entiteit {entity} heeft momenteel een ongeldige of niet-gemapte status ({state}). Zero Grid Controller kan de bedrijfsmodus daardoor niet veilig bepalen."
+    },
+    "array_configuration_problem": {
+      "title": "Probleem in array- of batterijconfiguratie",
+      "description": "Zero Grid Controller heeft een configuratieprobleem gedetecteerd voor {target}. Controleer de integratie-instellingen en de diagnosticsdetails."
+    },
+    "calibration_not_converging": {
+      "title": "Kalibratie convergeert niet",
+      "description": "Een of meer arrays zijn na langere runtime nog steeds niet betrouwbaar gekalibreerd: {arrays}. Controleer PV-feedback, actuatorrespons en de kalibratieomstandigheden."
     }
   },
   "exceptions": {

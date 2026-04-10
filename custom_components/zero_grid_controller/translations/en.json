@@ -288,7 +288,31 @@
   "issues": {
     "grid_sensor_unavailable": {
       "title": "Grid sensor unavailable",
-      "description": "One or more grid import sensors are unavailable. Zero Grid Controller cannot function without a valid grid measurement. Check that the sensors are configured correctly and the integrations providing them are running."
+      "description": "One or more grid sensors are unavailable or returning non-numeric values: {sensors}. Zero Grid Controller cannot function without a valid grid measurement. Check that the sensors are configured correctly and the integrations providing them are running."
+    },
+    "grid_sensor_stale": {
+      "title": "Grid sensor stale",
+      "description": "One or more grid sensors are no longer updating quickly enough for closed-loop control: {sensors}. Check the source integration and sensor freshness settings."
+    },
+    "battery_unresponsive": {
+      "title": "Battery is not following commands",
+      "description": "Battery {battery} is repeatedly failing to reach the commanded power. Check the sign convention, setpoint entity, settling time and battery availability."
+    },
+    "safe_state_active": {
+      "title": "Controller is in safe state",
+      "description": "Zero Grid Controller has applied its fail-safe state (current status: {status}) because normal control is currently blocked. Review the diagnostics and active repair issues."
+    },
+    "mode_guard_invalid_state": {
+      "title": "Mode guard input is invalid",
+      "description": "The configured mode guard entity {entity} currently has an invalid or unmapped state ({state}). Zero Grid Controller cannot safely determine its operating mode."
+    },
+    "array_configuration_problem": {
+      "title": "Array or battery configuration problem",
+      "description": "Zero Grid Controller detected a configuration problem for {target}. Review the integration settings and diagnostics details."
+    },
+    "calibration_not_converging": {
+      "title": "Calibration is not converging",
+      "description": "One or more arrays are still not reliably calibrated after extended runtime: {arrays}. Check PV feedback, actuator responsiveness and calibration conditions."
     }
   },
   "exceptions": {

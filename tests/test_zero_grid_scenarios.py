@@ -38,6 +38,7 @@ from custom_components.zero_grid_controller.const import (
 )
 from custom_components.zero_grid_controller.coordinator import ZeroGridCoordinator
 from custom_components.zero_grid_controller.estimator import RLSEstimator
+from custom_components.zero_grid_controller.repairs import ISSUE_GRID_SENSOR_UNAVAILABLE
 
 
 @pytest.fixture(autouse=True)
@@ -167,7 +168,6 @@ def _inject(
 ) -> None:
     """Inject arrays and initial setpoints directly into coordinator state."""
     coordinator._arrays = arrays
-    coordinator._grid_unavailable_reported = False
     for array in arrays:
         sp = (setpoints or {}).get(array.name, array.setpoint_max)
         coordinator._current_setpoints[array.name] = sp
@@ -762,25 +762,13 @@ async def test_scenario_grid_unavailable_dismiss_issue(hass: HomeAssistant) -> N
 
     coordinator = ZeroGridCoordinator(hass, entry)
     _inject(coordinator, [], {})
-    # Simulate: we previously reported the issue
-    coordinator._grid_unavailable_reported = True
+    # Simulate: the issue was previously active
+    coordinator._active_repair_issue_ids.add(ISSUE_GRID_SENSOR_UNAVAILABLE)
 
-    dismissed = []
-
-    def _mock_dismiss(hass_arg):
-        dismissed.append(True)
-
-    with (
-        patch(
-            "custom_components.zero_grid_controller.coordinator.dismiss_grid_sensor_unavailable",
-            side_effect=_mock_dismiss,
-        ),
-        patch.object(coordinator, "_persist_estimators"),
-    ):
+    with patch.object(coordinator, "_persist_estimators"):
         await coordinator._run_control_loop(5.0, __import__("time").monotonic())
 
-    assert dismissed, "dismiss_grid_sensor_unavailable should have been called"
-    assert coordinator._grid_unavailable_reported is False
+    assert ISSUE_GRID_SENSOR_UNAVAILABLE not in coordinator._active_repair_issue_ids
 
 
 # ---------------------------------------------------------------------------

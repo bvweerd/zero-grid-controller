@@ -12,6 +12,10 @@ from custom_components.zero_grid_controller.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 from custom_components.zero_grid_controller.estimator import RLSEstimator
+from custom_components.zero_grid_controller.repairs import (
+    ISSUE_BATTERY_UNRESPONSIVE,
+    issue_id,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,6 +52,95 @@ def _make_coordinator_mock(with_data: bool = True) -> MagicMock:
     coordinator.update_interval.total_seconds.return_value = 5.0
     coordinator.controller_enabled = True
     coordinator.safe_state_applied = False
+    coordinator.health_snapshot = {
+        "controller_enabled": True,
+        "safe_state_applied": False,
+        "mode": "active",
+        "status": "active",
+        "grid_inputs_ok": True,
+        "grid_inputs": [
+            {
+                "entity_id": "sensor.grid_power",
+                "role": "import",
+                "status": "ok",
+                "available": True,
+                "fresh": True,
+                "is_numeric": True,
+                "value": "150",
+                "age_s": 0.5,
+            }
+        ],
+        "mode_guard": {"enabled": False, "status": "disabled"},
+        "batteries": [
+            {
+                "name": "Battery",
+                "subentry_id": "battery_1",
+                "control_enabled": True,
+                "setpoint_entity": "number.battery_target",
+                "sensor_entity": "sensor.battery_power",
+                "max_charge_w": 3000.0,
+                "max_discharge_w": 3000.0,
+                "current_setpoint_w": 0.0,
+                "current_power_w": 0.0,
+                "measured_response_factor": 1.0,
+                "unresponsive": False,
+                "unresponsive_count": 0,
+                "settling_remaining_s": 0.0,
+                "verify_pending": False,
+                "verification_min_w": 100.0,
+                "unresponsive_threshold_w": 100.0,
+            }
+        ],
+        "calibration": {
+            "is_calibrating": False,
+            "reliable_arrays": ["PV West"],
+            "unreliable_arrays": [],
+            "issue_active": False,
+        },
+        "config_problems": [],
+        "active_repairs": [],
+    }
+    coordinator.control_cycle_log = [
+        {
+            "timestamp": "2026-04-10T10:00:00+00:00",
+            "cycle": 1,
+            "mode": "active",
+            "status": "active",
+            "grid_raw_w": 150.0,
+            "grid_filtered_w": 148.0,
+            "residual_w": 120.0,
+            "pid_output_w": 20.0,
+            "pid_p_w": 10.0,
+            "pid_i_w": 8.0,
+            "pid_d_w": 2.0,
+            "battery_clipping": False,
+            "safe_state_applied": False,
+            "setpoints": {"PV West": 80.0},
+            "battery_setpoints": {"Battery": 0.0},
+            "battery_unresponsive": {"Battery": False},
+        }
+    ]
+    coordinator.sensor_health_log = [
+        {
+            "timestamp": "2026-04-10T09:59:59+00:00",
+            "entity_id": "sensor.grid_power",
+            "role": "import",
+            "status": "ok",
+            "age_s": 0.5,
+        }
+    ]
+    coordinator.battery_response_log = [
+        {
+            "timestamp": "2026-04-10T09:59:58+00:00",
+            "battery": "Battery",
+            "commanded_w": 0.0,
+            "actual_w": 0.0,
+            "response_factor": 1.0,
+            "state": "ok",
+        }
+    ]
+    coordinator.repair_event_log = []
+    coordinator.calibration_log = []
 
     # PID
     pid = MagicMock()
@@ -144,12 +237,17 @@ async def test_diagnostics_with_data() -> None:
 
     assert "config_entry" in result
     assert "coordinator" in result
+    assert "health" in result
+    assert "grid_inputs" in result
+    assert "control_state" in result
     assert "pid" in result
     assert "arrays" in result
+    assert "batteries" in result
     assert "override_setpoints" in result
     assert "settling_state" in result
     assert "estimators" in result
     assert "repair_issues" in result
+    assert "history" in result
     assert "entities" in result
 
     # Check coordinator data is present
@@ -158,6 +256,10 @@ async def test_diagnostics_with_data() -> None:
     assert result["coordinator"]["status"] == "active"
     assert result["coordinator"]["battery_setpoints"]["Battery"] == 0.0
     assert result["coordinator"]["battery_unresponsive"]["Battery"] is False
+    assert result["control_state"]["residual_w"] == 0.0
+    assert result["grid_inputs"][0]["status"] == "ok"
+    assert result["batteries"][0]["name"] == "Battery"
+    assert len(result["history"]["control_cycle_log"]) == 1
 
     # Check PID data
     assert result["pid"]["kp"] == 0.5
@@ -286,6 +388,41 @@ async def test_diagnostics_with_repair_issues() -> None:
 
     assert len(result["repair_issues"]) == 1
     assert result["repair_issues"][0]["issue_id"] == "grid_sensor_unavailable"
+
+
+async def test_diagnostics_exposes_health_snapshot() -> None:
+    """Diagnostics returns the richer health and history sections."""
+    coordinator = _make_coordinator_mock(with_data=True)
+    coordinator.health_snapshot["active_repairs"] = [
+        issue_id(ISSUE_BATTERY_UNRESPONSIVE, "Battery")
+    ]
+    coordinator.health_snapshot["batteries"][0]["unresponsive"] = True
+    entry = _make_entry_mock(coordinator)
+
+    hass = MagicMock()
+    issue_registry = MagicMock()
+    issue_registry.issues.values.return_value = []
+    ent_reg = MagicMock()
+    ent_reg_module = MagicMock()
+    ent_reg_module.async_get.return_value = ent_reg
+    ent_reg_module.async_entries_for_config_entry.return_value = []
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(
+            "custom_components.zero_grid_controller.diagnostics.ir_async_get",
+            lambda _: issue_registry,
+        )
+        mp.setattr(
+            "custom_components.zero_grid_controller.diagnostics.er",
+            ent_reg_module,
+        )
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["health"]["active_repairs"] == [
+        issue_id(ISSUE_BATTERY_UNRESPONSIVE, "Battery")
+    ]
+    assert result["batteries"][0]["unresponsive"] is True
+    assert result["history"]["battery_response_log"][0]["state"] == "ok"
 
 
 # ---------------------------------------------------------------------------

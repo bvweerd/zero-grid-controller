@@ -38,6 +38,7 @@ async def async_get_config_entry_diagnostics(
 
     coordinator = getattr(runtime, "coordinator", None)
     coord_data: dict[str, Any] = {}
+    control_state: dict[str, Any] = {}
     if coordinator is not None and coordinator.data is not None:
         d = coordinator.data
         coord_data = {
@@ -60,6 +61,23 @@ async def async_get_config_entry_diagnostics(
             "array_gain_k": d.array_gain_k,
             "array_calibration": d.array_calibration,
         }
+        control_state = {
+            "grid_raw_w": d.grid_raw_w,
+            "grid_filtered_w": d.grid_filtered_w,
+            "residual_w": d.residual_w,
+            "pid_output_w": d.pid_output_w,
+            "pid_components": {
+                "p": d.pid_p_w,
+                "i": d.pid_i_w,
+                "d": d.pid_d_w,
+            },
+            "mode": d.mode,
+            "status": d.status,
+            "battery_clipping": d.battery_clipping,
+            "battery_setpoints": d.battery_setpoints,
+            "array_setpoints": d.setpoints,
+            "battery_unresponsive": d.battery_unresponsive,
+        }
 
     pid_state: dict[str, Any] = {}
     if coordinator is not None:
@@ -77,6 +95,7 @@ async def async_get_config_entry_diagnostics(
     array_configs: dict[str, Any] = {}
     if coordinator is not None:
         for array in coordinator.arrays:
+            est = coordinator.get_estimator(array.name)
             array_configs[array.name] = {
                 "output_type": array.output_type,
                 "setpoint_min": array.setpoint_min,
@@ -84,6 +103,22 @@ async def async_get_config_entry_diagnostics(
                 "settling_time_s": array.settling_time_s,
                 "max_power_w": array.max_power_w,
                 "enabled": array.enabled,
+                "current_setpoint": (
+                    coordinator.data.setpoints.get(array.name)
+                    if coordinator.data is not None
+                    else None
+                ),
+                "settling_remaining_s": round(
+                    max(
+                        0.0,
+                        coordinator.settling_until.get(array.name, 0.0)
+                        - time.monotonic(),
+                    ),
+                    1,
+                ),
+                "override_active": array.name in coordinator.override_setpoints,
+                "estimator_reliable": est.is_reliable if est is not None else False,
+                "estimated_gain": est.estimated_gain if est is not None else None,
             }
 
     # Active override setpoints (show only remaining seconds)
@@ -151,6 +186,28 @@ async def async_get_config_entry_diagnostics(
             "safe_state_applied": coordinator.safe_state_applied,
         }
 
+    health_snapshot = (
+        dict(coordinator.health_snapshot)
+        if coordinator is not None and coordinator.health_snapshot
+        else {}
+    )
+    grid_inputs = list(health_snapshot.get("grid_inputs", []))
+
+    # Battery diagnostics
+    batteries: list[dict[str, Any]] = []
+    if coordinator is not None:
+        batteries = list(health_snapshot.get("batteries", []))
+
+    history: dict[str, Any] = {}
+    if coordinator is not None:
+        history = {
+            "control_cycle_log": coordinator.control_cycle_log,
+            "sensor_health_log": coordinator.sensor_health_log,
+            "battery_response_log": coordinator.battery_response_log,
+            "repair_event_log": coordinator.repair_event_log,
+            "calibration_log": coordinator.calibration_log,
+        }
+
     ent_reg = er.async_get(hass)
     entities = [
         {
@@ -176,12 +233,17 @@ async def async_get_config_entry_diagnostics(
             },
         },
         "coordinator": coord_data,
+        "health": health_snapshot,
+        "grid_inputs": grid_inputs,
+        "control_state": control_state,
         "coordinator_timing": coordinator_timing,
         "pid": pid_state,
         "arrays": array_configs,
+        "batteries": batteries,
         "override_setpoints": override_setpoints,
         "settling_state": settling_state,
         "estimators": estimator_states,
         "repair_issues": repair_issues,
+        "history": history,
         "entities": entities,
     }
