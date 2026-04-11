@@ -8,29 +8,20 @@
           "name": "Integratienaam",
           "grid_import_sensors": "Grid importsensoren (vermogen afgenomen van net)",
           "grid_export_sensors": "Grid exportsensoren (vermogen geleverd aan net, optioneel)",
-          "invert_sign": "Teken omkeren (als uw importsensor negatieve waarden toont voor import)"
+          "deadband_w": "Dodeband (W)",
+          "ewm_alpha": "EWM-filter alpha",
+          "aggressiveness": "Regelsnelheid"
+        },
+        "data_description": {
+          "deadband_w": "Gridfout kleiner dan deze waarde wordt genegeerd. Voorkomt onnodige setpointwijzigingen dicht bij nul.",
+          "ewm_alpha": "Smoothingfactor voor het gridsignaal (0,05 = veel smoothing, 1,0 = geen filter).",
+          "aggressiveness": "Bepaalt hoe agressief de PID-versterking wordt ingesteld na kalibratie."
         }
-      },
-      "mode_guard": {
-        "title": "Optimizer-integratie (optioneel)",
-        "description": "Koppel met een optimizer zoals Battery Controller om besturingsmodi te coördineren. Wanneer ingeschakeld, bepaalt een externe entiteit of Zero Grid Controller actief, passief of uitgeschakeld wordt.",
-        "data": {
-          "mode_guard_enabled": "Gebruik een optimizer modus-entiteit",
-          "mode_guard_entity": "Modus-entiteit"
-        }
-      },
-      "mode_mapping": {
-        "title": "Optimizer-modi koppelen",
-        "description": "Kies voor elke moduswaarde van de geselecteerde entiteit wat Zero Grid Controller moet doen."
-      },
-      "done": {
-        "title": "Configuratie voltooid",
-        "description": "Zero Grid Controller is klaar. Voeg PV-arrays en batterijen toe als subentries. De controller begint automatisch met het leren van je systeem."
       }
     },
     "error": {
-      "required": "Dit veld is verplicht.",
-      "setpoint_entity_mismatch": "De gekozen setpoint-entiteit past niet bij het geselecteerde uitvoertype."
+      "no_sensors": "Minimaal één import- of exportsensor is vereist.",
+      "duplicate_name": "Deze naam is al in gebruik."
     },
     "abort": {
       "already_configured": "Zero Grid Controller is al geconfigureerd."
@@ -45,56 +36,53 @@
       "step": {
         "user": {
           "title": "PV-array toevoegen",
-          "description": "Configureer de PV-omvormeruitgang die de controller moet beheren.",
+          "description": "Kies een naam en uitvoertype voor de array.",
           "data": {
-            "array_name": "Array-naam (bijv. Dak Zuid)",
-            "setpoint_entity": "Entiteit die de vermogenslimiet instelt",
-            "output_type": "Uitvoertype",
-            "pv_power_entity": "PV-vermogensensor (optioneel, verbetert wolkendetectie)"
+            "array_name": "Arraynaam (bijv. Dak Zuid)",
+            "output_type": "Uitvoertype"
           }
         },
         "reconfigure": {
           "title": "PV-array configureren",
-          "description": "Pas de basisinstellingen van deze PV-array aan.",
+          "description": "Naam en uitvoertype bijwerken.",
           "data": {
-            "array_name": "Array-naam",
-            "setpoint_entity": "Entiteit die de vermogenslimiet instelt",
-            "output_type": "Uitvoertype",
-            "pv_power_entity": "PV-vermogensensor (optioneel)"
+            "array_name": "Arraynaam",
+            "output_type": "Uitvoertype"
           }
         },
-        "setpoint_range": {
-          "title": "Setpointbereik en timing",
-          "description": "Configureer de setpointlimieten en hoe snel deze omvormer reageert.",
+        "numeric_params": {
+          "title": "Numerieke setpointparameters",
+          "description": "Stel de entiteit en het bereik in voor de vermogenslimiet.",
           "data": {
-            "setpoint_min": "Minimale setpoint-waarde",
-            "setpoint_max": "Maximale setpoint-waarde",
-            "inverter_speed": "Hoe snel reageert deze omvormer?",
-            "response_speed": "Besturingsresponssnelheid",
-            "cloud_shadow_pv_ratio": "PV-ratio voor wolkschaduw (0-1)",
-            "cloud_shadow_min_gap_w": "Minimale wolkschaduw-afwijking (W)"
+            "setpoint_entity": "Entiteit voor de vermogenslimiet",
+            "setpoint_min": "Minimale setpointwaarde",
+            "setpoint_max": "Maximale setpointwaarde"
+          },
+          "data_description": {
+            "setpoint_min": "De laagste waarde die de controller ooit schrijft (bijv. 0% of 0 W).",
+            "setpoint_max": "De hoogste waarde — volledig vermogen. Kalibratie gebruikt dit bereik om de omvormerversterking te meten."
           }
         },
         "switch_params": {
-          "title": "Schakelaarbesturingsparameters",
-          "description": "Configureer de gridvermogensdrempels voor het in- en uitschakelen van deze schakelaar.",
+          "title": "Schakelaarparameters",
+          "description": "Stel de drempelwaarden in voor het in- en uitschakelen.",
           "data": {
-            "switch_on_threshold_w": "Inschakeldrempel (import W)",
-            "switch_off_threshold_w": "Uitschakeldrempel (export W)",
-            "switch_debounce_s": "Minimale aan/uit-tijd (s)",
-            "response_speed": "Besturingsresponssnelheid"
-          }
-        },
-        "recalibrate_option": {
-          "title": "Opslaan en kalibreren",
-          "description": "Optioneel: voer step-response kalibratie opnieuw uit na het opslaan. Doe dit op een zonnige dag voor de beste resultaten.",
-          "data": {
-            "_recalibrate": "Step-response kalibratie opnieuw uitvoeren na opslaan"
+            "setpoint_entity": "Schakelaarentiteit",
+            "switch_on_threshold_w": "Indrempelwaarde (import W)",
+            "switch_off_threshold_w": "Uitdrempelwaarde (export W)",
+            "switch_debounce_s": "Minimale aan/uit-tijd (s)"
+          },
+          "data_description": {
+            "switch_on_threshold_w": "De schakelaar gaat aan als de gridimport deze waarde overschrijdt.",
+            "switch_off_threshold_w": "De schakelaar gaat uit als de gridexport deze waarde overschrijdt.",
+            "switch_debounce_s": "Minimale seconden tussen schakelwijzigingen om snel schakelen te voorkomen."
           }
         }
       },
       "error": {
-        "setpoint_entity_mismatch": "De gekozen setpoint-entiteit past niet bij het geselecteerde uitvoertype."
+        "min_gte_max": "Minimale setpoint moet kleiner zijn dan maximale.",
+        "off_gte_on": "Uitdrempel moet kleiner zijn dan indrempel.",
+        "duplicate_name": "Deze arraynaam is al in gebruik."
       }
     },
     "battery": {
@@ -105,45 +93,37 @@
       "step": {
         "user": {
           "title": "Batterij toevoegen",
-          "description": "Configureer een batterijopslagsysteem voor de controller om te bewaken en optioneel aan te sturen.",
+          "description": "Configureer een thuisbatterij.",
           "data": {
             "name": "Batterijnaam (bijv. Thuisbatterij)",
-            "battery_sensor": "Batterijvermogensensor (negatief = laden, positief = ontladen)",
+            "battery_sensor": "Batterijvermogensensor",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
-            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)"
+            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
+            "battery_setpoint_entity": "Batterij setpoint-entiteit"
+          },
+          "data_description": {
+            "battery_sensor": "Tekenteken: negatief = laden, positief = ontladen.",
+            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen)."
           }
         },
         "reconfigure": {
           "title": "Batterij configureren",
-          "description": "Pas de basisinstellingen van deze batterij aan.",
+          "description": "Batterij-instellingen bijwerken.",
           "data": {
             "name": "Batterijnaam",
-            "battery_sensor": "Batterijvermogensensor (negatief = laden, positief = ontladen)",
+            "battery_sensor": "Batterijvermogensensor",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
-            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)"
-          }
-        },
-        "battery_control": {
-          "title": "Batterijbesturingsinstellingen",
-          "description": "Configureer of Zero Grid Controller het setpoint van deze batterij actief mag aansturen.",
-          "data": {
-            "battery_control_enabled": "Laat Zero Grid Controller het batterijsetpoint aansturen",
-            "battery_setpoint_entity": "Batterij setpoint-entiteit (verplicht als besturing is ingeschakeld)",
-            "response_speed": "Besturingsresponssnelheid",
-            "settling_time_s": "Settlingtijd (s) — hoe lang duurt het voordat de batterij het gevraagde vermogen bereikt",
-            "battery_write_threshold_w": "Minimale schrijfdelta (W)",
-            "battery_verification_min_w": "Minimaal verificatiecommando (W)",
-            "battery_unresponsive_threshold_w": "Drempel voor niet-reagerend detecteren (W)",
-            "battery_unresponsive_cycles": "Aantal niet-reagerende cycli",
-            "battery_response_ewm_alpha": "Response-learning alpha",
-            "battery_hard_reset_ratio": "Hard-reset ratio (0-1)",
-            "battery_recovery_blend": "Herstelblend (0-1)",
-            "battery_clipping_threshold": "Batterij clippingdrempel (0-1)"
+            "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
+            "battery_setpoint_entity": "Batterij setpoint-entiteit"
+          },
+          "data_description": {
+            "battery_sensor": "Tekenteken: negatief = laden, positief = ontladen.",
+            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen)."
           }
         }
       },
       "error": {
-        "setpoint_required": "Een setpoint-entiteit is vereist als batterijbesturing is ingeschakeld."
+        "duplicate_name": "Deze batterijnaam is al in gebruik."
       }
     }
   },
@@ -151,21 +131,18 @@
     "step": {
       "init": {
         "title": "Zero Grid Controller opties",
-        "description": "Schakel expertmodus in om PID- en estimatorparameters handmatig af te stellen. De online auto-tuner wordt uitgeschakeld wanneer expertmodus actief is.\n\nVoor geavanceerde functies zoals SoC-bewuste sturing, fasebalancering of tijdgebonden optimalisatie, gebruik de [Battery Controller](https://github.com/bvweerd/battery-controller)-integratie en koppel deze via de optimalisatormodus-entiteit hierboven.",
         "data": {
-          "expert_mode": "Expertmodus inschakelen",
-          "sensor_stale_s": "Versheidsvenster sensordata (s) — data ouder dan dit wordt als onbeschikbaar beschouwd",
-          "calib_max_grid_w": "Kalibratie-veiligheidslimiet (W) — breek kalibratie af als |gridvermogen| dit overschrijdt",
-          "array_clipping_threshold": "Array clippingdrempel (0-1)",
-          "calib_stable_variance_pct": "Kalibratie stabiele variantie (%)",
-          "calib_stable_window_s": "Kalibratie stabiliteitsvenster (s)",
-          "calib_baseline_samples": "Kalibratie baseline-samples",
-          "calib_settling_confirm_count": "Kalibratie settling-bevestigingen",
-          "calib_settling_threshold_w": "Kalibratie settlingdrempel (W)",
-          "calib_min_pv_w": "Minimaal PV-vermogen voor kalibratie (W)",
-          "calib_grid_variance_factor": "Grid-variantiefactor tijdens kalibratie",
-          "calib_inter_array_sleep_s": "Pauze tussen array-kalibraties (s)",
-          "calib_pv_sensor_max_wait_s": "Maximale wachttijd op PV-sensor per sample (s)"
+          "name": "Integratienaam",
+          "grid_import_sensors": "Grid importsensoren",
+          "grid_export_sensors": "Grid exportsensoren (optioneel)",
+          "deadband_w": "Dodeband (W)",
+          "ewm_alpha": "EWM-filter alpha",
+          "aggressiveness": "Regelsnelheid"
+        },
+        "data_description": {
+          "deadband_w": "Gridfout kleiner dan deze waarde wordt genegeerd. Voorkomt onnodige setpointwijzigingen dicht bij nul.",
+          "ewm_alpha": "Smoothingfactor voor het gridsignaal (0,05 = veel smoothing, 1,0 = geen filter).",
+          "aggressiveness": "Bepaalt hoe agressief de PID-versterking wordt ingesteld na kalibratie."
         }
       }
     }
@@ -181,125 +158,47 @@
       "pid_output_w": {
         "name": "PID-uitgang"
       },
-      "pid_p_w": {
-        "name": "PID P-term"
-      },
-      "pid_i_w": {
-        "name": "PID I-term"
-      },
-      "pid_d_w": {
-        "name": "PID D-term"
-      },
-      "mode": {
-        "name": "Controllermodus",
+      "status": {
+        "name": "Controllerstatus",
         "state": {
           "active": "Actief",
-          "passive": "Passief",
           "disabled": "Uitgeschakeld",
-          "deadband": "Dodeband",
-          "cloud_shadow": "Wolkschaduw",
-          "saturation": "Verzadiging"
+          "deadband": "Dodeband"
         }
-      },
-      "battery_clipping": {
-        "name": "Batterijclipping"
-      },
-      "learning_status": {
-        "name": "Leerstatus"
       },
       "array_setpoint": {
         "name": "Setpoint"
-      },
-      "array_clipping": {
-        "name": "PV-clipping"
-      },
-      "array_gain_k": {
-        "name": "Systeemversterking K"
-      },
-      "array_calibration": {
-        "name": "Kalibratievertrouwen"
       },
       "battery_setpoint": {
         "name": "Setpoint"
       }
     },
     "number": {
-      "kp": { "name": "Kp (proportionele versterking)" },
-      "ki": { "name": "Ki (integrale versterking)" },
-      "kd": { "name": "Kd (differentiële versterking)" },
       "ewm_alpha": { "name": "EWM-filter alpha" },
-      "deadband_w": { "name": "Dodeband (W)" },
-      "output_max_w": { "name": "Maximale uitgang (W)" },
-      "settling_time_s": { "name": "Settlingtijd (s)" },
-      "w_per_unit": { "name": "W per eenheid" }
-    },
-    "switch": {
-      "array_enabled": { "name": "Ingeschakeld" },
-      "controller_enabled": { "name": "Controller ingeschakeld" }
+      "deadband_w": { "name": "Dodeband (W)" }
     },
     "button": {
-      "reset_pid": { "name": "Reset PID" },
-      "recalibrate": { "name": "Kalibreer alle arrays opnieuw" }
+      "reset_pid": { "name": "PID resetten" },
+      "recalibrate": { "name": "Alle arrays opnieuw kalibreren" }
+    },
+    "switch": {
+      "controller_enabled": { "name": "Controller ingeschakeld" }
     }
   },
   "selector": {
     "output_type": {
       "options": {
         "percent": "Percentage (0–100%)",
-        "watt": "Watt (absoluut vermogenslimiet)",
-        "switch": "Aan/Uit schakelaar"
+        "watt": "Watt (absolute vermogenslimiet)",
+        "switch": "Aan/uit-schakelaar"
       }
     },
-    "inverter_speed": {
-      "options": {
-        "slow": "Langzaam — meer dan 20 seconden",
-        "normal": "Normaal — 5 tot 20 seconden",
-        "fast": "Snel — minder dan 5 seconden"
-      }
-    },
-    "mode_guard_action": {
-      "options": {
-        "active": "Volledige controle (actief)",
-        "passive": "Alleen beperken, nooit openen (passief)",
-        "disabled": "Niet ingrijpen (uitgeschakeld)"
-      }
-    },
-    "response_speed": {
+    "aggressiveness": {
       "options": {
         "cautious": "Voorzichtig — langzame, stabiele reactie",
         "normal": "Normaal — gebalanceerd (aanbevolen)",
         "fast": "Snel — snelle reactie, kan oscilleren"
       }
-    }
-  },
-  "issues": {
-    "grid_sensor_unavailable": {
-      "title": "Gridsensor niet beschikbaar",
-      "description": "Een of meer gridsensoren zijn niet beschikbaar of leveren geen numerieke waarden: {sensors}. Zero Grid Controller kan niet functioneren zonder een geldige gridmeting. Controleer of de sensoren correct zijn geconfigureerd en of de integraties die ze leveren actief zijn."
-    },
-    "grid_sensor_stale": {
-      "title": "Gridsensor verouderd",
-      "description": "Een of meer gridsensoren worden niet snel genoeg bijgewerkt voor closed-loop regeling: {sensors}. Controleer de bronintegratie en de ingestelde versheidsdrempel."
-    },
-    "battery_unresponsive": {
-      "title": "Batterij volgt commando's niet",
-      "description": "Batterij {battery} haalt herhaaldelijk het gevraagde vermogen niet. Controleer de tekenconventie, de setpoint-entiteit, de settlingtijd en de batterijbeschikbaarheid."
-    },
-    "safe_state_active": {
-      "title": "Controller staat in veilige toestand",
-      "description": "Zero Grid Controller heeft de fail-safe toestand toegepast (huidige status: {status}) omdat normale regeling momenteel geblokkeerd is. Bekijk de diagnostics en actieve reparatieproblemen."
-    },
-    "mode_guard_invalid_state": {
-      "title": "Mode-guard invoer is ongeldig",
-      "description": "De geconfigureerde mode-guard entiteit {entity} heeft momenteel een ongeldige of niet-gemapte status ({state}). Zero Grid Controller kan de bedrijfsmodus daardoor niet veilig bepalen."
-    },
-    "array_configuration_problem": {
-      "title": "Probleem in array- of batterijconfiguratie",
-      "description": "Zero Grid Controller heeft een configuratieprobleem gedetecteerd voor {target}. Controleer de integratie-instellingen en de diagnosticsdetails."
-    },
-    "calibration_not_converging": {
-      "title": "Kalibratie convergeert niet",
-      "description": "Een of meer arrays zijn na langere runtime nog steeds niet betrouwbaar gekalibreerd: {arrays}. Controleer PV-feedback, actuatorrespons en de kalibratieomstandigheden."
     }
   },
   "exceptions": {
@@ -309,30 +208,16 @@
   },
   "services": {
     "reset_pid": {
-      "name": "Reset PID",
-      "description": "Reset de PID-integrator en afgeleide geschiedenis."
+      "name": "PID resetten",
+      "description": "Reset de PID-integrator en differentiaalgeschiedenis."
     },
     "recalibrate": {
       "name": "Opnieuw kalibreren",
-      "description": "Voer automatische step-response kalibratie opnieuw uit voor een of alle arrays.",
+      "description": "Voer automatische stap-responsekalibratie opnieuw uit voor één of alle arrays.",
       "fields": {
         "array_name": {
-          "name": "Array-naam",
-          "description": "Naam van de array om te kalibreren. Laat leeg om alle arrays te kalibreren."
-        }
-      }
-    },
-    "override_setpoint": {
-      "name": "Setpoint overschrijven",
-      "description": "Forceer een setpoint voor een array, waarbij PID maximaal 5 minuten wordt omzeild.",
-      "fields": {
-        "array_name": {
-          "name": "Array-naam",
-          "description": "Naam van de array om te overschrijven."
-        },
-        "value": {
-          "name": "Waarde",
-          "description": "Setpoint-waarde (% of W, passend bij het uitvoertype van de array)."
+          "name": "Arraynaam",
+          "description": "Naam van de te kalibreren array. Laat leeg om alle arrays te kalibreren."
         }
       }
     }

@@ -8,29 +8,19 @@
           "name": "Integration name",
           "grid_import_sensors": "Grid import sensors (power drawn from grid)",
           "grid_export_sensors": "Grid export sensors (power delivered to grid, optional)",
-          "invert_sign": "Invert sign (if your import sensor shows negative values for import)"
+          "deadband_w": "Deadband (W)",
+          "ewm_alpha": "EWM filter alpha",
+          "aggressiveness": "Control aggressiveness"
+        },
+        "data_description": {
+          "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
+          "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
+          "aggressiveness": "Controls how aggressively PID gains are set after calibration."
         }
-      },
-      "mode_guard": {
-        "title": "Optimizer integration (optional)",
-        "description": "Connect to an optimizer like Battery Controller to coordinate control modes. When enabled, an external entity drives whether Zero Grid Controller runs actively, passively, or is disabled.",
-        "data": {
-          "mode_guard_enabled": "Use an optimizer mode entity",
-          "mode_guard_entity": "Mode entity"
-        }
-      },
-      "mode_mapping": {
-        "title": "Map optimizer modes",
-        "description": "For each mode value of the selected entity, choose what Zero Grid Controller should do."
-      },
-      "done": {
-        "title": "Setup complete",
-        "description": "Zero Grid Controller is ready. Add PV arrays and batteries as subentries. The controller will start learning your system automatically."
       }
     },
     "error": {
-      "required": "This field is required.",
-      "setpoint_entity_mismatch": "The selected setpoint entity does not match the chosen output type.",
+      "no_sensors": "At least one import or export sensor is required.",
       "duplicate_name": "This name is already in use."
     },
     "abort": {
@@ -46,56 +36,52 @@
       "step": {
         "user": {
           "title": "Add PV array",
-          "description": "Configure the PV inverter output you want the controller to manage.",
+          "description": "Choose an array name and output type.",
           "data": {
             "array_name": "Array name (e.g. Roof South)",
-            "setpoint_entity": "Entity that sets the power limit",
-            "output_type": "Output type",
-            "pv_power_entity": "PV power sensor (optional, improves cloud detection)"
+            "output_type": "Output type"
           }
         },
         "reconfigure": {
           "title": "Configure PV array",
-          "description": "Update the basic settings for this PV array.",
+          "description": "Update array name and output type.",
           "data": {
             "array_name": "Array name",
-            "setpoint_entity": "Entity that sets the power limit",
-            "output_type": "Output type",
-            "pv_power_entity": "PV power sensor (optional)"
+            "output_type": "Output type"
           }
         },
-        "setpoint_range": {
-          "title": "Setpoint range & timing",
-          "description": "Configure the setpoint limits and how fast this inverter responds.",
+        "numeric_params": {
+          "title": "Numeric setpoint parameters",
+          "description": "Set the entity and range for this array's power limit.",
           "data": {
+            "setpoint_entity": "Entity that sets the power limit",
             "setpoint_min": "Minimum setpoint value",
-            "setpoint_max": "Maximum setpoint value",
-            "inverter_speed": "How fast does this inverter respond?",
-            "response_speed": "Control response speed",
-            "cloud_shadow_pv_ratio": "Cloud shadow PV ratio (0-1)",
-            "cloud_shadow_min_gap_w": "Cloud shadow minimum gap (W)"
+            "setpoint_max": "Maximum setpoint value"
+          },
+          "data_description": {
+            "setpoint_min": "The lowest value the controller will ever write (e.g. 0 % or 0 W).",
+            "setpoint_max": "The highest value — full output. Calibration uses this range to measure inverter gain."
           }
         },
         "switch_params": {
           "title": "Switch control parameters",
           "description": "Configure the grid power thresholds for turning this switch on and off.",
           "data": {
+            "setpoint_entity": "Switch entity",
             "switch_on_threshold_w": "Turn on threshold (import W)",
             "switch_off_threshold_w": "Turn off threshold (export W)",
-            "switch_debounce_s": "Minimum on/off time (s)",
-            "response_speed": "Control response speed"
-          }
-        },
-        "recalibrate_option": {
-          "title": "Save & calibrate",
-          "description": "Optionally re-run step-response calibration after saving. Run this on a sunny day for best results.",
-          "data": {
-            "_recalibrate": "Re-run step-response calibration after saving"
+            "switch_debounce_s": "Minimum on/off time (s)"
+          },
+          "data_description": {
+            "switch_on_threshold_w": "The switch turns on when grid import exceeds this value.",
+            "switch_off_threshold_w": "The switch turns off when grid export exceeds this value.",
+            "switch_debounce_s": "Minimum seconds between state changes to prevent rapid toggling."
           }
         }
       },
       "error": {
-        "setpoint_entity_mismatch": "The selected setpoint entity does not match the chosen output type.",
+        "min_gte_max": "Minimum setpoint must be less than maximum.",
+        "off_gte_on": "Turn-off threshold must be less than turn-on threshold.",
         "duplicate_name": "This array name is already in use."
       }
     },
@@ -107,45 +93,36 @@
       "step": {
         "user": {
           "title": "Add battery",
-          "description": "Configure a battery storage system for the controller to monitor and optionally control.",
+          "description": "Configure a battery storage system.",
           "data": {
             "name": "Battery name (e.g. Home Battery)",
-            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
+            "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
-            "battery_max_discharge_w": "Maximum discharge power (W)"
+            "battery_max_discharge_w": "Maximum discharge power (W)",
+            "battery_setpoint_entity": "Battery setpoint entity"
+          },
+          "data_description": {
+            "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
           }
         },
         "reconfigure": {
           "title": "Configure battery",
-          "description": "Update the basic settings for this battery.",
+          "description": "Update battery settings.",
           "data": {
             "name": "Battery name",
-            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
+            "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
-            "battery_max_discharge_w": "Maximum discharge power (W)"
-          }
-        },
-        "battery_control": {
-          "title": "Battery control settings",
-          "description": "Configure whether Zero Grid Controller may actively command this battery's setpoint.",
-          "data": {
-            "battery_control_enabled": "Allow Zero Grid Controller to control battery setpoint",
-            "battery_setpoint_entity": "Battery setpoint entity (required when control is enabled)",
-            "response_speed": "Control response speed",
-            "settling_time_s": "Settling time (s) — how long before the battery reaches its commanded power",
-            "battery_write_threshold_w": "Minimum write delta (W)",
-            "battery_verification_min_w": "Minimum verification command (W)",
-            "battery_unresponsive_threshold_w": "Unresponsive detection threshold (W)",
-            "battery_unresponsive_cycles": "Unresponsive cycles",
-            "battery_response_ewm_alpha": "Response learning alpha",
-            "battery_hard_reset_ratio": "Hard reset ratio (0-1)",
-            "battery_recovery_blend": "Recovery blend (0-1)",
-            "battery_clipping_threshold": "Battery clipping threshold (0-1)"
+            "battery_max_discharge_w": "Maximum discharge power (W)",
+            "battery_setpoint_entity": "Battery setpoint entity"
+          },
+          "data_description": {
+            "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
           }
         }
       },
       "error": {
-        "setpoint_required": "A setpoint entity is required when battery control is enabled.",
         "duplicate_name": "This battery name is already in use."
       }
     }
@@ -154,21 +131,18 @@
     "step": {
       "init": {
         "title": "Zero Grid Controller options",
-        "description": "Enable expert mode to manually tune PID and estimator parameters. The online auto-tuner is disabled when expert mode is active.\n\nFor advanced features like SoC-aware control, phase balancing, or time-of-use scheduling, use the [Battery Controller](https://github.com/bvweerd/battery-controller) integration and connect it via the optimizer mode entity above.",
         "data": {
-          "expert_mode": "Enable expert mode",
-          "sensor_stale_s": "Sensor freshness window (s) — data older than this is treated as unavailable",
-          "calib_max_grid_w": "Calibration safety limit (W) — abort calibration if |grid power| exceeds this",
-          "array_clipping_threshold": "Array clipping threshold (0-1)",
-          "calib_stable_variance_pct": "Calibration stable variance (%)",
-          "calib_stable_window_s": "Calibration stability window (s)",
-          "calib_baseline_samples": "Calibration baseline samples",
-          "calib_settling_confirm_count": "Calibration settling confirmations",
-          "calib_settling_threshold_w": "Calibration settling threshold (W)",
-          "calib_min_pv_w": "Minimum PV power for calibration (W)",
-          "calib_grid_variance_factor": "Grid variance factor during calibration",
-          "calib_inter_array_sleep_s": "Delay between array calibrations (s)",
-          "calib_pv_sensor_max_wait_s": "PV sensor max wait per sample (s)"
+          "name": "Integration name",
+          "grid_import_sensors": "Grid import sensors",
+          "grid_export_sensors": "Grid export sensors (optional)",
+          "deadband_w": "Deadband (W)",
+          "ewm_alpha": "EWM filter alpha",
+          "aggressiveness": "Control aggressiveness"
+        },
+        "data_description": {
+          "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
+          "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
+          "aggressiveness": "Controls how aggressively PID gains are set after calibration."
         }
       }
     }
@@ -184,75 +158,31 @@
       "pid_output_w": {
         "name": "PID output"
       },
-      "pid_p_w": {
-        "name": "PID P-term"
-      },
-      "pid_i_w": {
-        "name": "PID I-term"
-      },
-      "pid_d_w": {
-        "name": "PID D-term"
-      },
-      "mode": {
-        "name": "Controller mode",
-        "state": {
-          "active": "Active",
-          "passive": "Passive",
-          "disabled": "Disabled"
-        }
-      },
       "status": {
         "name": "Controller status",
         "state": {
           "active": "Active",
-          "passive": "Passive",
           "disabled": "Disabled",
-          "deadband": "Deadband",
-          "cloud_shadow": "Cloud shadow",
-          "saturation": "Saturation"
+          "deadband": "Deadband"
         }
-      },
-      "learning_status": {
-        "name": "Learning status"
       },
       "array_setpoint": {
         "name": "Setpoint"
-      },
-      "array_clipping": {
-        "name": "PV clipping"
-      },
-      "array_gain_k": {
-        "name": "System gain K"
-      },
-      "array_calibration": {
-        "name": "Calibration confidence"
       },
       "battery_setpoint": {
         "name": "Setpoint"
       }
     },
-    "binary_sensor": {
-      "battery_clipping": {
-        "name": "Battery clipping"
-      }
-    },
     "number": {
-      "kp": { "name": "Kp (proportional gain)" },
-      "ki": { "name": "Ki (integral gain)" },
-      "kd": { "name": "Kd (derivative gain)" },
       "ewm_alpha": { "name": "EWM filter alpha" },
-      "deadband_w": { "name": "Deadband (W)" },
-      "output_max_w": { "name": "Maximum output (W)" },
-      "settling_time_s": { "name": "Settling time (s)" },
-      "w_per_unit": { "name": "W per unit" }
-    },
-    "switch": {
-      "array_enabled": { "name": "Enabled" },
-      "controller_enabled": { "name": "Controller enabled" }
+      "deadband_w": { "name": "Deadband (W)" }
     },
     "button": {
       "reset_pid": { "name": "Reset PID" },
       "recalibrate": { "name": "Recalibrate all arrays" }
+    },
+    "switch": {
+      "controller_enabled": { "name": "Controller enabled" }
     }
   },
   "selector": {
@@ -263,56 +193,12 @@
         "switch": "On/Off switch"
       }
     },
-    "inverter_speed": {
-      "options": {
-        "slow": "Slow — more than 20 seconds",
-        "normal": "Normal — 5 to 20 seconds",
-        "fast": "Fast — less than 5 seconds"
-      }
-    },
-    "mode_guard_action": {
-      "options": {
-        "active": "Full control (active)",
-        "passive": "Limit only, never open (passive)",
-        "disabled": "Hands off (disabled)"
-      }
-    },
-    "response_speed": {
+    "aggressiveness": {
       "options": {
         "cautious": "Cautious — slow, stable response",
         "normal": "Normal — balanced (recommended)",
         "fast": "Fast — quick, may oscillate"
       }
-    }
-  },
-  "issues": {
-    "grid_sensor_unavailable": {
-      "title": "Grid sensor unavailable",
-      "description": "One or more grid sensors are unavailable or returning non-numeric values: {sensors}. Zero Grid Controller cannot function without a valid grid measurement. Check that the sensors are configured correctly and the integrations providing them are running."
-    },
-    "grid_sensor_stale": {
-      "title": "Grid sensor stale",
-      "description": "One or more grid sensors are no longer updating quickly enough for closed-loop control: {sensors}. Check the source integration and sensor freshness settings."
-    },
-    "battery_unresponsive": {
-      "title": "Battery is not following commands",
-      "description": "Battery {battery} is repeatedly failing to reach the commanded power. Check the sign convention, setpoint entity, settling time and battery availability."
-    },
-    "safe_state_active": {
-      "title": "Controller is in safe state",
-      "description": "Zero Grid Controller has applied its fail-safe state (current status: {status}) because normal control is currently blocked. Review the diagnostics and active repair issues."
-    },
-    "mode_guard_invalid_state": {
-      "title": "Mode guard input is invalid",
-      "description": "The configured mode guard entity {entity} currently has an invalid or unmapped state ({state}). Zero Grid Controller cannot safely determine its operating mode."
-    },
-    "array_configuration_problem": {
-      "title": "Array or battery configuration problem",
-      "description": "Zero Grid Controller detected a configuration problem for {target}. Review the integration settings and diagnostics details."
-    },
-    "calibration_not_converging": {
-      "title": "Calibration is not converging",
-      "description": "One or more arrays are still not reliably calibrated after extended runtime: {arrays}. Check PV feedback, actuator responsiveness and calibration conditions."
     }
   },
   "exceptions": {
@@ -332,20 +218,6 @@
         "array_name": {
           "name": "Array name",
           "description": "Name of the array to calibrate. Leave empty to calibrate all arrays."
-        }
-      }
-    },
-    "override_setpoint": {
-      "name": "Override setpoint",
-      "description": "Force a setpoint for an array, bypassing PID for up to 5 minutes.",
-      "fields": {
-        "array_name": {
-          "name": "Array name",
-          "description": "Name of the array to override."
-        },
-        "value": {
-          "name": "Value",
-          "description": "Setpoint value (% or W, matching the array's output type)."
         }
       }
     }
