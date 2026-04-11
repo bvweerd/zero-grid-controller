@@ -14,34 +14,10 @@ recalibrate:
   name: Recalibrate
   description: Re-run automatic step-response calibration for one or all PV arrays.
   fields:
-    array_name:
-      name: Array name
-      description: Name of the array to calibrate. Leave empty to calibrate all arrays.
+    entry_id:
+      name: Entry ID
+      description: Config entry ID (optional; omit to recalibrate the loaded instance).
       required: false
-      example: "Roof South"
+      example: "abc123def456"
       selector:
         text:
-
-override_setpoint:
-  name: Override setpoint
-  description: >
-    Force a specific setpoint for one array, bypassing the PID controller
-    for up to 5 minutes. Useful for testing or manual override.
-  fields:
-    array_name:
-      name: Array name
-      description: Name of the array to override.
-      required: true
-      example: "Roof South"
-      selector:
-        text:
-    value:
-      name: Value
-      description: Setpoint value (percentage or Watts, matching the array's output type).
-      required: true
-      example: 50
-      selector:
-        number:
-          min: 0
-          max: 100000
-          step: 1

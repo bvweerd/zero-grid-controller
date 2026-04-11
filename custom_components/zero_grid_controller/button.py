@@ -77,6 +77,4 @@ class ZGCRecalibrateButton(ButtonEntity):
         if not self._coordinator.arrays:
             _LOGGER.warning("No arrays to calibrate")
             return
-        self._coordinator.hass.async_create_task(
-            self._coordinator.start_calibration()
-        )
+        self._coordinator.hass.async_create_task(self._coordinator.start_calibration())

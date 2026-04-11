@@ -82,7 +82,14 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_DEADBAND_W,
                 default=defaults.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W),
             ): selector(
-                {"number": {"min": 0, "max": 500, "step": 1, "unit_of_measurement": "W"}}
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 500,
+                        "step": 1,
+                        "unit_of_measurement": "W",
+                    }
+                }
             ),
             vol.Optional(
                 CONF_EWM_ALPHA,
@@ -160,7 +167,14 @@ def _array_switch_schema(defaults: dict[str, Any]) -> vol.Schema:
                     CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W
                 ),
             ): selector(
-                {"number": {"min": 0, "max": 10000, "step": 10, "unit_of_measurement": "W"}}
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 10000,
+                        "step": 10,
+                        "unit_of_measurement": "W",
+                    }
+                }
             ),
             vol.Required(
                 CONF_SWITCH_OFF_THRESHOLD_W,
@@ -168,13 +182,27 @@ def _array_switch_schema(defaults: dict[str, Any]) -> vol.Schema:
                     CONF_SWITCH_OFF_THRESHOLD_W, DEFAULT_SWITCH_OFF_THRESHOLD_W
                 ),
             ): selector(
-                {"number": {"min": 0, "max": 10000, "step": 10, "unit_of_measurement": "W"}}
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 10000,
+                        "step": 10,
+                        "unit_of_measurement": "W",
+                    }
+                }
             ),
             vol.Optional(
                 CONF_SWITCH_DEBOUNCE_S,
                 default=defaults.get(CONF_SWITCH_DEBOUNCE_S, DEFAULT_SWITCH_DEBOUNCE_S),
             ): selector(
-                {"number": {"min": 5, "max": 300, "step": 5, "unit_of_measurement": "s"}}
+                {
+                    "number": {
+                        "min": 5,
+                        "max": 300,
+                        "step": 5,
+                        "unit_of_measurement": "s",
+                    }
+                }
             ),
         }
     )
@@ -194,7 +222,14 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
                     CONF_BATTERY_MAX_CHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W
                 ),
             ): selector(
-                {"number": {"min": 100, "max": 50000, "step": 100, "unit_of_measurement": "W"}}
+                {
+                    "number": {
+                        "min": 100,
+                        "max": 50000,
+                        "step": 100,
+                        "unit_of_measurement": "W",
+                    }
+                }
             ),
             vol.Required(
                 CONF_BATTERY_MAX_DISCHARGE_W,
@@ -202,7 +237,14 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
                     CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_DISCHARGE_W
                 ),
             ): selector(
-                {"number": {"min": 100, "max": 50000, "step": 100, "unit_of_measurement": "W"}}
+                {
+                    "number": {
+                        "min": 100,
+                        "max": 50000,
+                        "step": 100,
+                        "unit_of_measurement": "W",
+                    }
+                }
             ),
             vol.Required(
                 CONF_BATTERY_SETPOINT_ENTITY,
@@ -261,7 +303,9 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
         """Step 2a: numeric setpoint parameters."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            if float(user_input[CONF_SETPOINT_MIN]) >= float(user_input[CONF_SETPOINT_MAX]):
+            if float(user_input[CONF_SETPOINT_MIN]) >= float(
+                user_input[CONF_SETPOINT_MAX]
+            ):
                 errors[CONF_SETPOINT_MIN] = "min_gte_max"
             if not errors:
                 self._draft.update(user_input)
@@ -343,7 +387,9 @@ class BatterySubEntryFlow(config_entries.ConfigSubentryFlow):
             if name and self._name_exists(name, current_id=None):
                 errors[CONF_NAME] = "duplicate_name"
             if not errors:
-                return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
+                return self.async_create_entry(
+                    title=user_input[CONF_NAME], data=user_input
+                )
         return self.async_show_form(
             step_id="user",
             data_schema=_battery_schema(user_input or {}),
@@ -385,10 +431,16 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    SUBENTRY_FLOWS = {
-        ARRAY_SUBENTRY_TYPE: ArraySubEntryFlow,
-        BATTERY_SUBENTRY_TYPE: BatterySubEntryFlow,
-    }
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: config_entries.ConfigEntry
+    ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
+        """Return supported subentry flow handlers."""
+        return {
+            ARRAY_SUBENTRY_TYPE: ArraySubEntryFlow,
+            BATTERY_SUBENTRY_TYPE: BatterySubEntryFlow,
+        }
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

@@ -41,7 +41,9 @@ class ActuatorManager:
         if array.output_type == OUTPUT_TYPE_SWITCH:
             state = self._hass.states.get(array.setpoint_entity)
             if state is None or state.state in ("unavailable", "unknown"):
-                _LOGGER.debug("Skipping write to %s: unavailable", array.setpoint_entity)
+                _LOGGER.debug(
+                    "Skipping write to %s: unavailable", array.setpoint_entity
+                )
                 return
             service = "turn_on" if value > 0 else "turn_off"
             await self._hass.services.async_call(

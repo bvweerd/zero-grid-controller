@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from custom_components.zero_grid_controller.battery import (
-    BatteryConfig,
     battery_config_from_subentry,
 )
 

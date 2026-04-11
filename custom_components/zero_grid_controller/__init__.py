@@ -96,7 +96,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         battery_devices=battery_devices,
     )
 
-    _register_services(hass)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await coordinator.async_config_entry_first_refresh()
@@ -114,15 +113,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         entry.runtime_data = None
-        remaining = [
-            e
-            for e in hass.config_entries.async_entries(DOMAIN)
-            if e.entry_id != entry.entry_id
-        ]
-        if not remaining:
-            for service in (SERVICE_RESET_PID, SERVICE_RECALIBRATE):
-                hass.services.async_remove(DOMAIN, service)
     return unload_ok
+
+
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Set up the integration domain."""
+    _register_services(hass)
+    return True
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
@@ -182,9 +179,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
             if entry.runtime_data is None:
                 continue
-            hass.async_create_task(
-                entry.runtime_data.coordinator.start_calibration()
-            )
+            hass.async_create_task(entry.runtime_data.coordinator.start_calibration())
 
     hass.services.async_register(
         DOMAIN,

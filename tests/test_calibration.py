@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -200,8 +199,12 @@ async def test_calibration_aggressiveness_fast_higher_kp():
     array = _make_array()
     baseline = [50.0] * 10
     response = [50.0, 100.0, 200.0, 278.0, 280.0, 280.0, 280.0, 280.0, 280.0]
-    calibrator_normal, _ = _calibrator([array], baseline + response, aggressiveness="normal")
-    calibrator_fast, _ = _calibrator([array], baseline + response, aggressiveness="fast")
+    calibrator_normal, _ = _calibrator(
+        [array], baseline + response, aggressiveness="normal"
+    )
+    calibrator_fast, _ = _calibrator(
+        [array], baseline + response, aggressiveness="fast"
+    )
     with patch("asyncio.sleep", new=AsyncMock()):
         result_normal = (await calibrator_normal.run())[0]
         result_fast = (await calibrator_fast.run())[0]

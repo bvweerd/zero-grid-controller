@@ -116,7 +116,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._ewm_alpha = float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
         self._deadband_w = float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
         self._enabled: bool = bool(data.get(CONF_CONTROLLER_ENABLED, True))
-        self._aggressiveness: str = data.get(CONF_AGGRESSIVENESS, DEFAULT_AGGRESSIVENESS)
+        self._aggressiveness: str = data.get(
+            CONF_AGGRESSIVENESS, DEFAULT_AGGRESSIVENESS
+        )
 
         self._import_sensors: list[str] = data.get(CONF_GRID_IMPORT_SENSORS, [])
         self._export_sensors: list[str] = data.get(CONF_GRID_EXPORT_SENSORS, [])
@@ -380,7 +382,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
             current = self._current_setpoints.get(array.name, array.setpoint_max)
             # Positive delta_units: raise setpoint (open PV); negative: lower (curtail)
-            new_sp = clamp(current + delta_units, array.setpoint_min, array.setpoint_max)
+            new_sp = clamp(
+                current + delta_units, array.setpoint_min, array.setpoint_max
+            )
             if new_sp == current:
                 continue
 
@@ -419,9 +423,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         for result in results:
             if not result.success:
                 continue
-            array = next(
-                (a for a in self.arrays if a.name == result.array_name), None
-            )
+            array = next((a for a in self.arrays if a.name == result.array_name), None)
             if array is None:
                 continue
             # Find the matching subentry and update its data
@@ -430,6 +432,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                     continue
                 subentry_data = dict(subentry.data)
                 from .const import CONF_ARRAY_NAME
+
                 if subentry_data.get(CONF_ARRAY_NAME) != array.name:
                     continue
                 new_data = {

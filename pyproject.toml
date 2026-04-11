@@ -18,3 +18,10 @@ ignore_missing_imports = true
 warn_incomplete_stub = true
 warn_redundant_casts = true
 warn_unused_configs = true
+
+[tool.coverage.run]
+source = ["custom_components/zero_grid_controller"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+omit = ["tests/*"]

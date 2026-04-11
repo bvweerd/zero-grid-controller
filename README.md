@@ -173,7 +173,7 @@ Calibration confidence is shown in the diagnostics analyzer. Arrays showing `est
 | Service | Description |
 |---------|-------------|
 | `zero_grid_controller.reset_pid` | Reset the PID integrator and derivative history |
-| `zero_grid_controller.recalibrate` | Re-run step-response calibration for all arrays |
+| `zero_grid_controller.recalibrate` | Re-run step-response calibration for the configured instance; `entry_id` is optional |
 
 ---
 

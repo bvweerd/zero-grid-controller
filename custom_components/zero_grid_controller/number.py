@@ -81,7 +81,9 @@ class ZGCDeadbandNumber(_ZGCNumberBase):
     _attr_native_step = DEADBAND_STEP_W
     _attr_native_unit_of_measurement = "W"
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_deadband_w"
 
@@ -102,7 +104,9 @@ class ZGCFilterAlphaNumber(_ZGCNumberBase):
     _attr_native_max_value = EWM_ALPHA_MAX
     _attr_native_step = EWM_ALPHA_STEP
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_ewm_alpha"
 

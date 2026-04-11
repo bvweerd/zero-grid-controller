@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.zero_grid_controller.const import DOMAIN, STATUS_ACTIVE
 from custom_components.zero_grid_controller.array import ArrayConfig
 from custom_components.zero_grid_controller.battery import BatteryConfig
+from custom_components.zero_grid_controller.const import DOMAIN, STATUS_ACTIVE
 from custom_components.zero_grid_controller.coordinator import ZeroGridCoordinator
 
 
@@ -26,7 +26,10 @@ def _entry(kp=1.0, ki=0.0, deadband_w=10.0, ewm_alpha=1.0):
             "name": "Test ZGC",
             "grid_import_sensors": ["sensor.grid_import"],
             "grid_export_sensors": ["sensor.grid_export"],
-            "kp": kp, "ki": ki, "deadband_w": deadband_w, "ewm_alpha": ewm_alpha,
+            "kp": kp,
+            "ki": ki,
+            "deadband_w": deadband_w,
+            "ewm_alpha": ewm_alpha,
         },
         options={},
     )
@@ -86,8 +89,10 @@ async def test_import_pv_at_max_discharges_batteries(hass):
     hass.states.async_set("sensor.grid_import", "300")
     hass.states.async_set("sensor.grid_export", "0")
 
-    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()), \
-         patch.object(coordinator._actuators, "write_setpoint", new=AsyncMock()):
+    with (
+        patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()),
+        patch.object(coordinator._actuators, "write_setpoint", new=AsyncMock()),
+    ):
         result = await coordinator._async_update_data()
 
     assert result.status == STATUS_ACTIVE

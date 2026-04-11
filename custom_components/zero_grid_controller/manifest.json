@@ -3,6 +3,7 @@
   "name": "Zero Grid Controller",
   "version": "0.1.0",
   "config_flow": true,
+  "single_config_entry": true,
   "sub_entries": true,
   "iot_class": "local_polling",
   "requirements": [],

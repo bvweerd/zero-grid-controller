@@ -215,9 +215,9 @@
       "name": "Opnieuw kalibreren",
       "description": "Voer automatische stap-responsekalibratie opnieuw uit voor één of alle arrays.",
       "fields": {
-        "array_name": {
-          "name": "Arraynaam",
-          "description": "Naam van de te kalibreren array. Laat leeg om alle arrays te kalibreren."
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry-ID om opnieuw te kalibreren. Laat leeg om de geladen instantie opnieuw te kalibreren."
         }
       }
     }

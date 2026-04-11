@@ -34,7 +34,6 @@
   },
   "services": {
     "reset_pid": { "service": "mdi:restart" },
-    "recalibrate": { "service": "mdi:chart-scatter-plot" },
-    "override_setpoint": { "service": "mdi:hand-pointing-right" }
+    "recalibrate": { "service": "mdi:chart-scatter-plot" }
   }
 }

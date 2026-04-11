@@ -155,14 +155,18 @@ class ArrayCalibrator:
                 window.pop(0)
 
             # Record when grid first moves from baseline
-            if abs(g - baseline) > CALIB_SETTLING_THRESHOLD_W and settling_start is None:
+            if (
+                abs(g - baseline) > CALIB_SETTLING_THRESHOLD_W
+                and settling_start is None
+            ):
                 settling_start = elapsed
 
             # Settled = window full AND range within threshold AND moved from baseline
             if (
                 len(window) == CALIB_SETTLING_CONFIRM_COUNT
                 and (max(window) - min(window)) < CALIB_SETTLING_THRESHOLD_W
-                and abs(sum(window) / len(window) - baseline) > CALIB_SETTLING_THRESHOLD_W
+                and abs(sum(window) / len(window) - baseline)
+                > CALIB_SETTLING_THRESHOLD_W
             ):
                 break
 
@@ -174,10 +178,16 @@ class ArrayCalibrator:
 
         # Check settled: window full AND range within threshold AND moved from baseline
         settled = (
-            len(settled_values) == CALIB_SETTLING_CONFIRM_COUNT
-            and (max(settled_values) - min(settled_values)) < CALIB_SETTLING_THRESHOLD_W
-            and abs(sum(settled_values) / len(settled_values) - baseline) > CALIB_SETTLING_THRESHOLD_W
-        ) if settled_values else False
+            (
+                len(settled_values) == CALIB_SETTLING_CONFIRM_COUNT
+                and (max(settled_values) - min(settled_values))
+                < CALIB_SETTLING_THRESHOLD_W
+                and abs(sum(settled_values) / len(settled_values) - baseline)
+                > CALIB_SETTLING_THRESHOLD_W
+            )
+            if settled_values
+            else False
+        )
 
         if not settled:
             return self._failed(array, "Inverter did not settle within timeout")

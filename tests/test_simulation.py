@@ -7,8 +7,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.zero_grid_controller.const import (
     DOMAIN,
-    STATUS_ACTIVE,
-    STATUS_DEADBAND,
     STATUS_DISABLED,
 )
 from custom_components.zero_grid_controller.coordinator import ZeroGridCoordinator

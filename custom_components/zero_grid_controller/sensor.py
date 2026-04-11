@@ -108,7 +108,9 @@ class ZGCGridRawSensor(ZGCSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_grid_raw_w"
 
@@ -126,7 +128,9 @@ class ZGCGridFilteredSensor(ZGCSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_grid_filtered_w"
 
@@ -144,7 +148,9 @@ class ZGCPIDOutputSensor(ZGCSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_pid_output_w"
 
@@ -159,7 +165,9 @@ class ZGCStatusSensor(ZGCSensorBase):
 
     _attr_translation_key = "status"
 
-    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, entry, device)
         self._attr_unique_id = f"{entry.entry_id}_status"
 

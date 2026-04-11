@@ -215,9 +215,9 @@
       "name": "Recalibrate",
       "description": "Re-run automatic step-response calibration for one or all arrays.",
       "fields": {
-        "array_name": {
-          "name": "Array name",
-          "description": "Name of the array to calibrate. Leave empty to calibrate all arrays."
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "Config entry ID to recalibrate. Leave empty to recalibrate the loaded instance."
         }
       }
     }

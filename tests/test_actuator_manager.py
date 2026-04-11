@@ -9,7 +9,10 @@ import pytest
 from custom_components.zero_grid_controller.actuator_manager import ActuatorManager
 from custom_components.zero_grid_controller.array import ArrayConfig
 from custom_components.zero_grid_controller.battery import BatteryConfig
-from custom_components.zero_grid_controller.const import OUTPUT_TYPE_PERCENT, OUTPUT_TYPE_SWITCH
+from custom_components.zero_grid_controller.const import (
+    OUTPUT_TYPE_PERCENT,
+    OUTPUT_TYPE_SWITCH,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +20,9 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     return
 
 
-def _make_array(name: str = "Array1", output_type: str = OUTPUT_TYPE_PERCENT) -> ArrayConfig:
+def _make_array(
+    name: str = "Array1", output_type: str = OUTPUT_TYPE_PERCENT
+) -> ArrayConfig:
     entity = "switch.array" if output_type == OUTPUT_TYPE_SWITCH else "number.array_sp"
     return ArrayConfig(
         name=name,
@@ -105,6 +110,16 @@ async def test_write_setpoint_switch_turn_off(hass_mock):
     assert call[1] == "turn_off"
 
 
+async def test_write_setpoint_switch_skips_unavailable(hass_mock):
+    manager = ActuatorManager(hass_mock)
+    array = _make_array(output_type=OUTPUT_TYPE_SWITCH)
+    hass_mock.states.get.return_value = MagicMock(state="unknown")
+
+    await manager.write_setpoint(array, 1.0)
+
+    hass_mock.services.async_call.assert_not_called()
+
+
 async def test_enter_safe_state_sets_arrays_to_max(hass_mock):
     manager = ActuatorManager(hass_mock)
     array = _make_array()
@@ -128,3 +143,23 @@ async def test_enter_safe_state_skips_switch_arrays(hass_mock):
     current_setpoints: dict[str, float] = {}
     await manager.enter_safe_state([switch_array], [], current_setpoints)
     hass_mock.services.async_call.assert_not_called()
+
+
+async def test_enter_safe_state_logs_array_write_failure(hass_mock, caplog):
+    manager = ActuatorManager(hass_mock)
+    array = _make_array()
+    manager.write_setpoint = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await manager.enter_safe_state([array], [], {})
+
+    assert "Failed to set Array1 to max" in caplog.text
+
+
+async def test_enter_safe_state_logs_battery_write_failure(hass_mock, caplog):
+    manager = ActuatorManager(hass_mock)
+    battery = _make_battery()
+    manager.write_numeric_entity = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await manager.enter_safe_state([], [battery], {})
+
+    assert "Failed to set battery Battery1 to 0" in caplog.text
