@@ -11,7 +11,7 @@ BATTERY_SUBENTRY_TYPE = "battery"
 CONF_NAME = "name"
 CONF_GRID_IMPORT_SENSORS = "grid_import_sensors"
 CONF_GRID_EXPORT_SENSORS = "grid_export_sensors"
-CONF_ENABLE_ENTITY = "enable_entity"
+CONF_CONTROLLER_ENABLED = "controller_enabled"
 CONF_EWM_ALPHA = "ewm_alpha"
 CONF_DEADBAND_W = "deadband_w"
 CONF_KP = "kp"
@@ -112,6 +112,7 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.NUMBER,
     Platform.BUTTON,
+    Platform.SWITCH,
 ]
 
 # Services

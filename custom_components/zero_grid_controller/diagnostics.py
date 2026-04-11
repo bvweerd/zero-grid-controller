@@ -54,6 +54,6 @@ async def async_get_config_entry_diagnostics(
             "deadband_w": coordinator._deadband_w,
             "ewm_alpha": coordinator._ewm_alpha,
             "aggressiveness": coordinator._aggressiveness,
-            "enable_entity": coordinator._enable_entity,
+            "controller_enabled": coordinator._enabled,
         },
     }

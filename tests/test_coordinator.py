@@ -32,7 +32,7 @@ def _make_entry(
     kp=1.0,
     ki=0.0,
     kd=0.0,
-    enable_entity=None,
+    controller_enabled=True,
     subentries=None,
 ):
     data = {
@@ -44,9 +44,8 @@ def _make_entry(
         "kp": kp,
         "ki": ki,
         "kd": kd,
+        "controller_enabled": controller_enabled,
     }
-    if enable_entity:
-        data["enable_entity"] = enable_entity
     entry = MockConfigEntry(domain=DOMAIN, title="Test", data=data, options={})
     if subentries:
         # MockConfigEntry uses a dict for subentries
@@ -103,24 +102,22 @@ async def test_grid_above_deadband_returns_active(hass):
     assert result.status == STATUS_ACTIVE
 
 
-async def test_enable_entity_off_returns_disabled(hass):
-    entry = _make_entry(enable_entity="input_boolean.enable_zgc")
+async def test_controller_disabled_returns_disabled(hass):
+    entry = _make_entry(controller_enabled=False)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     _set_state(hass, "sensor.grid_import", 100)
     _set_state(hass, "sensor.grid_export", 0)
-    hass.states.async_set("input_boolean.enable_zgc", "off")
     result = await coordinator._async_update_data()
     assert result.status == STATUS_DISABLED
 
 
-async def test_enable_entity_on_allows_control(hass):
-    entry = _make_entry(enable_entity="input_boolean.enable_zgc", deadband_w=20.0, ewm_alpha=1.0)
+async def test_controller_enabled_allows_control(hass):
+    entry = _make_entry(controller_enabled=True, deadband_w=20.0, ewm_alpha=1.0)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     _set_state(hass, "sensor.grid_import", 100)
     _set_state(hass, "sensor.grid_export", 0)
-    hass.states.async_set("input_boolean.enable_zgc", "on")
     result = await coordinator._async_update_data()
     assert result.status == STATUS_ACTIVE
 

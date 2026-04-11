@@ -8,10 +8,14 @@
           "name": "Integration name",
           "grid_import_sensors": "Grid import sensors (power drawn from grid)",
           "grid_export_sensors": "Grid export sensors (power delivered to grid, optional)",
-          "enable_entity": "Enable switch (optional)",
           "deadband_w": "Deadband (W)",
           "ewm_alpha": "EWM filter alpha",
           "aggressiveness": "Control aggressiveness"
+        },
+        "data_description": {
+          "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
+          "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
+          "aggressiveness": "Controls how aggressively PID gains are set after calibration."
         }
       }
     },
@@ -53,6 +57,10 @@
             "setpoint_entity": "Entity that sets the power limit",
             "setpoint_min": "Minimum setpoint value",
             "setpoint_max": "Maximum setpoint value"
+          },
+          "data_description": {
+            "setpoint_min": "The lowest value the controller will ever write (e.g. 0 % or 0 W).",
+            "setpoint_max": "The highest value — full output. Calibration uses this range to measure inverter gain."
           }
         },
         "switch_params": {
@@ -63,6 +71,11 @@
             "switch_on_threshold_w": "Turn on threshold (import W)",
             "switch_off_threshold_w": "Turn off threshold (export W)",
             "switch_debounce_s": "Minimum on/off time (s)"
+          },
+          "data_description": {
+            "switch_on_threshold_w": "The switch turns on when grid import exceeds this value.",
+            "switch_off_threshold_w": "The switch turns off when grid export exceeds this value.",
+            "switch_debounce_s": "Minimum seconds between state changes to prevent rapid toggling."
           }
         }
       },
@@ -83,10 +96,14 @@
           "description": "Configure a battery storage system.",
           "data": {
             "name": "Battery name (e.g. Home Battery)",
-            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
+            "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
             "battery_setpoint_entity": "Battery setpoint entity"
+          },
+          "data_description": {
+            "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
           }
         },
         "reconfigure": {
@@ -94,10 +111,14 @@
           "description": "Update battery settings.",
           "data": {
             "name": "Battery name",
-            "battery_sensor": "Battery power sensor (negative = charging, positive = discharging)",
+            "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
             "battery_setpoint_entity": "Battery setpoint entity"
+          },
+          "data_description": {
+            "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
           }
         }
       },
@@ -114,10 +135,14 @@
           "name": "Integration name",
           "grid_import_sensors": "Grid import sensors",
           "grid_export_sensors": "Grid export sensors (optional)",
-          "enable_entity": "Enable switch (optional)",
           "deadband_w": "Deadband (W)",
           "ewm_alpha": "EWM filter alpha",
           "aggressiveness": "Control aggressiveness"
+        },
+        "data_description": {
+          "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
+          "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
+          "aggressiveness": "Controls how aggressively PID gains are set after calibration."
         }
       }
     }
@@ -155,6 +180,9 @@
     "button": {
       "reset_pid": { "name": "Reset PID" },
       "recalibrate": { "name": "Recalibrate all arrays" }
+    },
+    "switch": {
+      "controller_enabled": { "name": "Controller enabled" }
     }
   },
   "selector": {

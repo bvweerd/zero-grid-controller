@@ -21,8 +21,8 @@ from .const import (
     BATTERY_SUBENTRY_TYPE,
     CONF_AGGRESSIVENESS,
     CONF_CALIBRATION_CONFIDENCE,
+    CONF_CONTROLLER_ENABLED,
     CONF_DEADBAND_W,
-    CONF_ENABLE_ENTITY,
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
@@ -115,7 +115,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         )
         self._ewm_alpha = float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
         self._deadband_w = float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
-        self._enable_entity: str | None = data.get(CONF_ENABLE_ENTITY)
+        self._enabled: bool = bool(data.get(CONF_CONTROLLER_ENABLED, True))
         self._aggressiveness: str = data.get(CONF_AGGRESSIVENESS, DEFAULT_AGGRESSIVENESS)
 
         self._import_sensors: list[str] = data.get(CONF_GRID_IMPORT_SENSORS, [])
@@ -316,12 +316,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
     def _is_enabled(self) -> bool:
         """Return True if the controller should be active."""
-        if not self._enable_entity:
-            return True
-        state = self.hass.states.get(self._enable_entity)
-        if state is None or state.state in ("unavailable", "unknown"):
-            return False
-        return state.state in ("on", "true", "1", "yes")
+        return self._enabled
 
     async def _read_grid(self) -> float | None:
         """Read and sum grid import/export sensors. Returns None on failure."""

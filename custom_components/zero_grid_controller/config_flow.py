@@ -22,7 +22,6 @@ from .const import (
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
     CONF_DEADBAND_W,
-    CONF_ENABLE_ENTITY,
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
@@ -37,6 +36,7 @@ from .const import (
     CONF_W_PER_UNIT,
     DEFAULT_AGGRESSIVENESS,
     DEFAULT_BATTERY_MAX_CHARGE_W,
+    DEFAULT_BATTERY_MAX_DISCHARGE_W,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_SETPOINT_MAX,
@@ -78,9 +78,6 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_GRID_EXPORT_SENSORS,
                 default=defaults.get(CONF_GRID_EXPORT_SENSORS, []),
             ): _POWER_SENSOR_MULTI,
-            vol.Optional(CONF_ENABLE_ENTITY): selector(
-                {"entity": {"domain": ["input_boolean", "switch"]}}
-            ),
             vol.Optional(
                 CONF_DEADBAND_W,
                 default=defaults.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W),
@@ -98,6 +95,7 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
                 {
                     "select": {
                         "options": ["cautious", "normal", "fast"],
+                        "translation_key": "aggressiveness",
                     }
                 }
             ),
@@ -121,7 +119,8 @@ def _array_type_schema(defaults: dict[str, Any]) -> vol.Schema:
                             OUTPUT_TYPE_PERCENT,
                             OUTPUT_TYPE_WATT,
                             OUTPUT_TYPE_SWITCH,
-                        ]
+                        ],
+                        "translation_key": "output_type",
                     }
                 }
             ),
@@ -200,7 +199,7 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_BATTERY_MAX_DISCHARGE_W,
                 default=defaults.get(
-                    CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_CHARGE_W
+                    CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_DISCHARGE_W
                 ),
             ): selector(
                 {"number": {"min": 100, "max": 50000, "step": 100, "unit_of_measurement": "W"}}
