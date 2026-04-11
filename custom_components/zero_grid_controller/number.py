@@ -1,9 +1,8 @@
-"""Number platform for Zero Grid Controller — expert mode tuning parameters."""
+"""Number platform for Zero Grid Controller — tuning parameters."""
 
 from __future__ import annotations
 
 import logging
-from inspect import isawaitable
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -13,48 +12,16 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
-    ARRAY_SUBENTRY_TYPE,
     CONF_DEADBAND_W,
     CONF_EWM_ALPHA,
-    CONF_EXPERT_MODE,
-    CONF_KD,
-    CONF_KI,
-    CONF_KP,
-    CONF_OUTPUT_MAX_W,
-    CONF_SETTLING_TIME_S,
-    CONF_W_PER_UNIT,
     DEADBAND_MAX_W,
     DEADBAND_MIN_W,
     DEADBAND_STEP_W,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
-    DEFAULT_KD,
-    DEFAULT_KI,
-    DEFAULT_KP,
-    DEFAULT_OUTPUT_MAX_W,
-    DEFAULT_SETTLING_TIME_S,
-    DEFAULT_W_PER_UNIT,
     EWM_ALPHA_MAX,
     EWM_ALPHA_MIN,
     EWM_ALPHA_STEP,
-    KD_MAX,
-    KD_MIN,
-    KD_STEP,
-    KI_MAX,
-    KI_MIN,
-    KI_STEP,
-    KP_MAX,
-    KP_MIN,
-    KP_STEP,
-    OUTPUT_MAX_MAX_W,
-    OUTPUT_MAX_MIN_W,
-    OUTPUT_MAX_STEP_W,
-    SETTLING_TIME_MAX_S,
-    SETTLING_TIME_MIN_S,
-    SETTLING_TIME_STEP_S,
-    W_PER_UNIT_MAX,
-    W_PER_UNIT_MIN,
-    W_PER_UNIT_STEP,
 )
 from .coordinator import ZeroGridCoordinator
 
@@ -68,49 +35,20 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up number entities (expert mode parameters)."""
+    """Set up number entities."""
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
-    array_devices: dict[str, DeviceInfo] = entry.runtime_data.array_devices
 
     async_add_entities(
         [
-            ZGCKpNumber(coordinator, entry, main_device),
-            ZGCKiNumber(coordinator, entry, main_device),
-            ZGCKdNumber(coordinator, entry, main_device),
-            ZGCEwmAlphaNumber(coordinator, entry, main_device),
             ZGCDeadbandNumber(coordinator, entry, main_device),
-            ZGCOutputMaxNumber(coordinator, entry, main_device),
+            ZGCFilterAlphaNumber(coordinator, entry, main_device),
         ]
     )
 
-    for subentry in entry.subentries.values():
-        if subentry.subentry_type != ARRAY_SUBENTRY_TYPE:
-            continue
-        array_name = subentry.data.get("array_name", subentry.subentry_id)
-        device = array_devices.get(subentry.subentry_id)
-        if device is None:
-            continue
-        async_add_entities(
-            [
-                ZGCArraySettlingTimeNumber(
-                    coordinator, entry, device, subentry.subentry_id, array_name
-                ),
-                ZGCArrayWPerUnitNumber(
-                    coordinator, entry, device, subentry.subentry_id, array_name
-                ),
-            ],
-            config_subentry_id=subentry.subentry_id,
-        )
 
-
-# ---------------------------------------------------------------------------
-# Base class
-# ---------------------------------------------------------------------------
-
-
-class ZGCNumberBase(NumberEntity):
-    """Base class for ZGC number entities."""
+class _ZGCNumberBase(NumberEntity):
+    """Base class for coordinator-backed number entities."""
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
@@ -121,264 +59,57 @@ class ZGCNumberBase(NumberEntity):
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
-        unique_key: str,
-        config_key: str,
-        default: float,
     ) -> None:
         self._coordinator = coordinator
         self._entry = entry
-        self._config_key = config_key
-        self._default = default
-        self._attr_unique_id = f"{entry.entry_id}_{unique_key}"
         self._attr_device_info = device
-        self._attr_translation_key = config_key
 
-    @property
-    def entity_registry_enabled_default(self) -> bool:
-        """Show only in expert mode."""
-        return bool(self._entry.options.get(CONF_EXPERT_MODE, False))
+    async def _persist(self, conf_key: str, value: float) -> None:
+        """Write a value back to config entry options and reload coordinator."""
+        options = {**self._entry.options, conf_key: value}
+        self.hass.config_entries.async_update_entry(self._entry, options=options)
+        self._coordinator.reload_config()
+        self.async_write_ha_state()
+
+
+class ZGCDeadbandNumber(_ZGCNumberBase):
+    """Deadband — grid error below this is ignored."""
+
+    _attr_translation_key = "deadband_w"
+    _attr_native_min_value = DEADBAND_MIN_W
+    _attr_native_max_value = DEADBAND_MAX_W
+    _attr_native_step = DEADBAND_STEP_W
+    _attr_native_unit_of_measurement = "W"
+
+    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_deadband_w"
 
     @property
     def native_value(self) -> float:
-        return float(
-            self._entry.options.get(
-                self._config_key,
-                self._entry.data.get(self._config_key, self._default),
-            )
-        )
+        data = {**self._entry.data, **self._entry.options}
+        return float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
 
     async def async_set_native_value(self, value: float) -> None:
-        """Persist the new value and notify the coordinator."""
-        self._coordinator._mark_internal_update()
-        self.hass.config_entries.async_update_entry(
-            self._entry,
-            options={**self._entry.options, self._config_key: value},
-        )
-        await self._on_value_changed(value)
-        self.async_write_ha_state()
-
-    async def _on_value_changed(self, value: float) -> None:
-        """Hook for subclasses to propagate changes to the coordinator."""
+        await self._persist(CONF_DEADBAND_W, value)
 
 
-# ---------------------------------------------------------------------------
-# Main device number entities
-# ---------------------------------------------------------------------------
+class ZGCFilterAlphaNumber(_ZGCNumberBase):
+    """EWM filter smoothing factor (0.05 = heavy smoothing, 1.0 = no filter)."""
 
-
-class ZGCKpNumber(ZGCNumberBase):
-    _attr_native_min_value = KP_MIN
-    _attr_native_max_value = KP_MAX
-    _attr_native_step = KP_STEP
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, CONF_KP, CONF_KP, DEFAULT_KP)
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_gains(
-            value, self._coordinator.pid.ki, self._coordinator.pid.kd
-        )
-
-
-class ZGCKiNumber(ZGCNumberBase):
-    _attr_native_min_value = KI_MIN
-    _attr_native_max_value = KI_MAX
-    _attr_native_step = KI_STEP
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, CONF_KI, CONF_KI, DEFAULT_KI)
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_gains(
-            self._coordinator.pid.kp, value, self._coordinator.pid.kd
-        )
-
-
-class ZGCKdNumber(ZGCNumberBase):
-    _attr_native_min_value = KD_MIN
-    _attr_native_max_value = KD_MAX
-    _attr_native_step = KD_STEP
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, CONF_KD, CONF_KD, DEFAULT_KD)
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_gains(
-            self._coordinator.pid.kp, self._coordinator.pid.ki, value
-        )
-
-
-class ZGCEwmAlphaNumber(ZGCNumberBase):
+    _attr_translation_key = "ewm_alpha"
     _attr_native_min_value = EWM_ALPHA_MIN
     _attr_native_max_value = EWM_ALPHA_MAX
     _attr_native_step = EWM_ALPHA_STEP
 
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(
-            coordinator,
-            entry,
-            device,
-            CONF_EWM_ALPHA,
-            CONF_EWM_ALPHA,
-            DEFAULT_EWM_ALPHA,
-        )
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.set_ewm_alpha(value)
-
-
-class ZGCDeadbandNumber(ZGCNumberBase):
-    _attr_native_min_value = DEADBAND_MIN_W
-    _attr_native_max_value = DEADBAND_MAX_W
-    _attr_native_step = DEADBAND_STEP_W
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(
-            coordinator,
-            entry,
-            device,
-            CONF_DEADBAND_W,
-            CONF_DEADBAND_W,
-            DEFAULT_DEADBAND_W,
-        )
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.set_deadband(value)
-
-
-class ZGCOutputMaxNumber(ZGCNumberBase):
-    _attr_native_min_value = OUTPUT_MAX_MIN_W
-    _attr_native_max_value = OUTPUT_MAX_MAX_W
-    _attr_native_step = OUTPUT_MAX_STEP_W
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(
-            coordinator,
-            entry,
-            device,
-            CONF_OUTPUT_MAX_W,
-            CONF_OUTPUT_MAX_W,
-            DEFAULT_OUTPUT_MAX_W,
-        )
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.pid.set_output_limits(-value, value)
-
-
-# ---------------------------------------------------------------------------
-# Per-array number entities
-# ---------------------------------------------------------------------------
-
-
-class ZGCArrayNumberBase(ZGCNumberBase):
-    """Base for per-array number entities."""
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        config_key: str,
-        default: float,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator,
-            entry,
-            device,
-            f"{subentry_id}_{config_key}",
-            config_key,
-            default,
-        )
-        self._array_name = array_name
+    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_ewm_alpha"
 
     @property
     def native_value(self) -> float:
-        subentry = self._coordinator.get_array_subentry(self._array_name)
-        if subentry is not None and self._config_key in subentry.data:
-            return float(subentry.data[self._config_key])
-        array = self._coordinator.get_array(self._array_name)
-        if array is not None and hasattr(array, self._config_key):
-            return float(getattr(array, self._config_key))
-        return float(self._default)
+        data = {**self._entry.data, **self._entry.options}
+        return float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
 
     async def async_set_native_value(self, value: float) -> None:
-        """Persist the per-array value to the matching subentry."""
-        result = self._coordinator.async_update_array_config(
-            self._array_name, {self._config_key: value}
-        )
-        if isawaitable(result):
-            await result
-        await self._on_value_changed(value)
-        self.async_write_ha_state()
-
-
-class ZGCArraySettlingTimeNumber(ZGCArrayNumberBase):
-    _attr_native_min_value = SETTLING_TIME_MIN_S
-    _attr_native_max_value = SETTLING_TIME_MAX_S
-    _attr_native_step = SETTLING_TIME_STEP_S
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator,
-            entry,
-            device,
-            subentry_id,
-            CONF_SETTLING_TIME_S,
-            float(DEFAULT_SETTLING_TIME_S),
-            array_name,
-        )
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.apply_array_config_update(
-            self._array_name, {CONF_SETTLING_TIME_S: int(value)}
-        )
-
-
-class ZGCArrayWPerUnitNumber(ZGCArrayNumberBase):
-    _attr_native_min_value = W_PER_UNIT_MIN
-    _attr_native_max_value = W_PER_UNIT_MAX
-    _attr_native_step = W_PER_UNIT_STEP
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator,
-            entry,
-            device,
-            subentry_id,
-            CONF_W_PER_UNIT,
-            DEFAULT_W_PER_UNIT,
-            array_name,
-        )
-
-    async def _on_value_changed(self, value: float) -> None:
-        self._coordinator.apply_array_config_update(
-            self._array_name, {CONF_W_PER_UNIT: value}
-        )
+        await self._persist(CONF_EWM_ALPHA, value)

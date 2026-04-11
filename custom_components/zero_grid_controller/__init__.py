@@ -1,7 +1,7 @@
 """Zero Grid Controller — Home Assistant custom integration.
 
 Keeps net grid power close to 0 W by controlling PV inverter output limits
-via a self-tuning PID controller with online RLS parameter estimation.
+via a self-tuning PID controller.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from .const import (
     CONF_NAME,
     DOMAIN,
     PLATFORMS,
-    SERVICE_OVERRIDE_SETPOINT,
     SERVICE_RECALIBRATE,
     SERVICE_RESET_PID,
 )
@@ -35,16 +34,9 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-_MANIFEST: dict[str, Any] | None = None
-
-
-def _get_manifest() -> dict[str, Any]:
-    global _MANIFEST
-    if _MANIFEST is None:
-        _MANIFEST = json.loads(
-            (Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")
-        )
-    return _MANIFEST
+_MANIFEST: dict[str, Any] = json.loads(
+    (Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")
+)
 
 
 @dataclass
@@ -62,7 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up Zero Grid Controller entry %s", entry.entry_id)
 
     name = entry.data.get(CONF_NAME, entry.title)
-    version = _get_manifest().get("version", "unknown")
+    version = _MANIFEST.get("version", "unknown")
 
     main_device = DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
@@ -104,16 +96,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         battery_devices=battery_devices,
     )
 
-    # Register services (once per domain)
     _register_services(hass)
-
-    # Register options update listener
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    # Refresh coordinator before entity setup so platforms start with valid data
     await coordinator.async_config_entry_first_refresh()
-
-    # Forward setup to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _LOGGER.debug("Zero Grid Controller entry %s ready", entry.entry_id)
@@ -123,9 +109,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.info("Unloading Zero Grid Controller entry %s", entry.entry_id)
-    # Cancel any running calibration before tearing down platforms
     if entry.runtime_data is not None:
-        await entry.runtime_data.coordinator.async_shutdown()
+        entry.runtime_data.coordinator.abort_calibration()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         entry.runtime_data = None
@@ -135,24 +120,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if e.entry_id != entry.entry_id
         ]
         if not remaining:
-            for service in (
-                SERVICE_RESET_PID,
-                SERVICE_RECALIBRATE,
-                SERVICE_OVERRIDE_SETPOINT,
-            ):
+            for service in (SERVICE_RESET_PID, SERVICE_RECALIBRATE):
                 hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate config entries to the current schema version."""
-    _LOGGER.debug(
-        "Migrating config entry %s from version %s.%s",
-        config_entry.entry_id,
-        config_entry.version,
-        config_entry.minor_version,
-    )
-    # Version 1 is the initial version — nothing to migrate.
     return True
 
 
@@ -167,26 +141,22 @@ async def async_remove_config_entry_device(
             continue
         device_id = identifier[1]
         if device_id == config_entry.entry_id:
-            return False  # Main device — cannot remove while active
+            return False
         if device_id in config_entry.subentries:
-            return False  # Active subentry device
-    return True  # Stale device — allow removal
+            return False
+    return True
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload integration on structural config changes."""
-    if entry.runtime_data is None:
-        return
-    if entry.runtime_data.coordinator.consume_internal_update() is True:
+    """Reload integration when config/options change."""
+    if entry.runtime_data is not None:
         entry.runtime_data.coordinator.reload_config()
         return
-    _LOGGER.debug("Config entry %s updated, reloading", entry.entry_id)
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _register_services(hass: HomeAssistant) -> None:
-    """Register domain services (idempotent — skip if already registered)."""
-
+    """Register domain services (idempotent)."""
     if hass.services.has_service(DOMAIN, SERVICE_RESET_PID):
         return
 
@@ -196,7 +166,7 @@ def _register_services(hass: HomeAssistant) -> None:
             if entry_id and entry.entry_id != entry_id:
                 continue
             if entry.runtime_data:
-                entry.runtime_data.coordinator.reset_pid()
+                entry.runtime_data.coordinator._pid.reset()
 
     hass.services.async_register(
         DOMAIN,
@@ -206,59 +176,19 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
     async def _handle_recalibrate(call: ServiceCall) -> None:
-        array_name: str | None = call.data.get("array_name")
+        entry_id = call.data.get("entry_id")
         for entry in hass.config_entries.async_entries(DOMAIN):
+            if entry_id and entry.entry_id != entry_id:
+                continue
             if entry.runtime_data is None:
                 continue
-            coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
-            arrays = [
-                a
-                for a in coordinator.arrays
-                if array_name is None or a.name == array_name
-            ]
-            if not arrays:
-                continue
-            coordinator.async_start_calibration(
-                arrays,
-                lambda msg, pct: _LOGGER.debug(
-                    "Calibration: %s (%.0f%%)", msg, pct * 100
-                ),
+            hass.async_create_task(
+                entry.runtime_data.coordinator.start_calibration()
             )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_RECALIBRATE,
         _handle_recalibrate,
-        schema=vol.Schema({vol.Optional("array_name"): str}),
-    )
-
-    async def _handle_override_setpoint(call: ServiceCall) -> None:
-        array_name: str = call.data["array_name"]
-        value: float = float(call.data["value"])
-        found = False
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            if entry.runtime_data is None:
-                continue
-            coordinator = entry.runtime_data.coordinator
-            try:
-                await coordinator.async_override_setpoint(array_name, value)
-                found = True
-            except ValueError:
-                pass
-        if not found:
-            _LOGGER.warning(
-                "override_setpoint: no array named '%s' found in any active entry",
-                array_name,
-            )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_OVERRIDE_SETPOINT,
-        _handle_override_setpoint,
-        schema=vol.Schema(
-            {
-                vol.Required("array_name"): str,
-                vol.Required("value"): vol.Coerce(float),
-            }
-        ),
+        schema=vol.Schema({vol.Optional("entry_id"): str}),
     )

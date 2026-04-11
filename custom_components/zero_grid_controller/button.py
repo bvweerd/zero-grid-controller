@@ -27,16 +27,16 @@ async def async_setup_entry(
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
 
-    entities: list[ButtonEntity] = [
-        ZGCResetPIDButton(coordinator, entry, main_device),
-        ZGCRecalibrateButton(coordinator, entry, main_device),
-    ]
-
-    async_add_entities(entities)
+    async_add_entities(
+        [
+            ZGCResetPIDButton(coordinator, entry, main_device),
+            ZGCRecalibrateButton(coordinator, entry, main_device),
+        ]
+    )
 
 
 class ZGCResetPIDButton(ButtonEntity):
-    """Button to reset the PID integrator and derivative history."""
+    """Button to reset the PID integrator."""
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
@@ -49,18 +49,15 @@ class ZGCResetPIDButton(ButtonEntity):
         device: DeviceInfo,
     ) -> None:
         self._coordinator = coordinator
-        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_reset_pid"
         self._attr_device_info = device
 
     async def async_press(self) -> None:
-        """Handle button press."""
-        _LOGGER.info("Reset PID button pressed")
-        self._coordinator.reset_pid()
+        self._coordinator._pid.reset()
 
 
 class ZGCRecalibrateButton(ButtonEntity):
-    """Button to recalibrate all arrays."""
+    """Button to run calibration on all numeric arrays."""
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
@@ -73,19 +70,13 @@ class ZGCRecalibrateButton(ButtonEntity):
         device: DeviceInfo,
     ) -> None:
         self._coordinator = coordinator
-        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_recalibrate"
         self._attr_device_info = device
 
     async def async_press(self) -> None:
-        """Handle button press."""
-        _LOGGER.info("Recalibrate button pressed - starting calibration for all arrays")
-        arrays = self._coordinator.arrays
-        if not arrays:
+        if not self._coordinator.arrays:
             _LOGGER.warning("No arrays to calibrate")
             return
-
-        self._coordinator.async_start_calibration(
-            arrays,
-            lambda msg, pct: _LOGGER.info("Calibration: %s (%.0f%%)", msg, pct * 100),
+        self._coordinator.hass.async_create_task(
+            self._coordinator.start_calibration()
         )

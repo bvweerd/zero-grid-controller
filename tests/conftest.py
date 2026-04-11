@@ -13,12 +13,10 @@ def mock_config_entry() -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title="Test ZGC",
-        unique_id=DOMAIN,
         data={
             "name": "Test ZGC",
-            "grid_measurement_type": "net",
-            "grid_sensor": "sensor.grid_power",
-            "invert_sign": False,
+            "grid_import_sensors": ["sensor.grid_import"],
+            "grid_export_sensors": ["sensor.grid_export"],
         },
         options={},
     )

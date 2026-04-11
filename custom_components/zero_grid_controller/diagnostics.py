@@ -1,249 +1,59 @@
-"""Diagnostics support for Zero Grid Controller."""
+"""Diagnostics for Zero Grid Controller."""
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
-from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.issue_registry import async_get as ir_async_get
 
-from .const import (
-    CONF_BATTERY_SENSOR,
-    CONF_BATTERY_SETPOINT_ENTITY,
-    CONF_GRID_EXPORT_SENSORS,
-    CONF_GRID_IMPORT_SENSORS,
-    CONF_MODE_GUARD_ENTITY,
-    DEFAULT_RESPONSE_FACTOR,
-    DOMAIN,
-)
-
-TO_REDACT: set[str] = {
-    CONF_GRID_IMPORT_SENSORS,
-    CONF_GRID_EXPORT_SENSORS,
-    CONF_BATTERY_SENSOR,
-    CONF_BATTERY_SETPOINT_ENTITY,
-    CONF_MODE_GUARD_ENTITY,
-}
+from .coordinator import ZeroGridCoordinator
 
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
-    """Return diagnostics for this config entry."""
-    runtime = entry.runtime_data
-
-    coordinator = getattr(runtime, "coordinator", None)
-    coord_data: dict[str, Any] = {}
-    control_state: dict[str, Any] = {}
-    if coordinator is not None and coordinator.data is not None:
-        d = coordinator.data
-        coord_data = {
-            "grid_raw_w": d.grid_raw_w,
-            "grid_filtered_w": d.grid_filtered_w,
-            "pid_output_w": d.pid_output_w,
-            "pid_components": {
-                "p": d.pid_p_w,
-                "i": d.pid_i_w,
-                "d": d.pid_d_w,
-            },
-            "mode": d.mode,
-            "status": d.status,
-            "battery_clipping": d.battery_clipping,
-            "learning_status": d.learning_status,
-            "setpoints": d.setpoints,
-            "battery_setpoints": d.battery_setpoints,
-            "battery_unresponsive": d.battery_unresponsive,
-            "array_clipping": d.array_clipping,
-            "array_gain_k": d.array_gain_k,
-            "array_calibration": d.array_calibration,
-        }
-        control_state = {
-            "grid_raw_w": d.grid_raw_w,
-            "grid_filtered_w": d.grid_filtered_w,
-            "residual_w": d.residual_w,
-            "pid_output_w": d.pid_output_w,
-            "pid_components": {
-                "p": d.pid_p_w,
-                "i": d.pid_i_w,
-                "d": d.pid_d_w,
-            },
-            "mode": d.mode,
-            "status": d.status,
-            "battery_clipping": d.battery_clipping,
-            "battery_setpoints": d.battery_setpoints,
-            "array_setpoints": d.setpoints,
-            "battery_unresponsive": d.battery_unresponsive,
-        }
-
-    pid_state: dict[str, Any] = {}
-    if coordinator is not None:
-        pid = coordinator.pid
-        pid_state = {
-            "kp": pid.kp,
-            "ki": pid.ki,
-            "kd": pid.kd,
-            "integral": pid.integral,
-            "output_min": pid.output_min,
-            "output_max": pid.output_max,
-        }
-
-    # Array configurations
-    array_configs: dict[str, Any] = {}
-    if coordinator is not None:
-        for array in coordinator.arrays:
-            est = coordinator.get_estimator(array.name)
-            array_configs[array.name] = {
-                "output_type": array.output_type,
-                "setpoint_min": array.setpoint_min,
-                "setpoint_max": array.setpoint_max,
-                "settling_time_s": array.settling_time_s,
-                "max_power_w": array.max_power_w,
-                "enabled": array.enabled,
-                "current_setpoint": (
-                    coordinator.data.setpoints.get(array.name)
-                    if coordinator.data is not None
-                    else None
-                ),
-                "settling_remaining_s": round(
-                    max(
-                        0.0,
-                        coordinator.settling_until.get(array.name, 0.0)
-                        - time.monotonic(),
-                    ),
-                    1,
-                ),
-                "override_active": array.name in coordinator.override_setpoints,
-                "estimator_reliable": est.is_reliable if est is not None else False,
-                "estimated_gain": est.estimated_gain if est is not None else None,
-            }
-
-    # Active override setpoints (show only remaining seconds)
-    now = time.monotonic()
-    override_setpoints: dict[str, Any] = {}
-    if coordinator is not None:
-        for name, (value, expires_at) in coordinator.override_setpoints.items():
-            remaining = max(0.0, expires_at - now)
-            override_setpoints[name] = {
-                "value": value,
-                "remaining_seconds": round(remaining, 1),
-            }
-
-    # Settling state per array (seconds remaining, 0 if not settling)
-    settling_state: dict[str, float] = {}
-    if coordinator is not None:
-        settling_until = coordinator.settling_until
-        for array in coordinator.arrays:
-            until = settling_until.get(array.name, 0.0)
-            settling_state[array.name] = round(max(0.0, until - now), 1)
-
-    # Estimator details
-    estimator_states: dict[str, Any] = {}
-    if coordinator is not None:
-        for array in coordinator.arrays:
-            est = coordinator.get_estimator(array.name)
-            if est is not None:
-                est_dict = est.to_dict()
-                est_dict["is_reliable"] = est.is_reliable
-                est_dict["estimated_gain"] = est.estimated_gain
-                est_dict["suggested_kp"] = est.suggest_kp(
-                    coordinator.pid.kp, DEFAULT_RESPONSE_FACTOR
-                )
-                estimator_states[array.name] = est_dict
-
-    # Repair issues
-    issue_registry = ir_async_get(hass)
-    repair_issues = [
-        {
-            "issue_id": issue.issue_id,
-            "severity": issue.severity.value if issue.severity else None,
-            "is_fixable": issue.is_fixable,
-            "translation_key": issue.translation_key,
-        }
-        for issue in issue_registry.issues.values()
-        if issue.domain == DOMAIN
-    ]
-
-    # Coordinator timing
-    coordinator_timing: dict[str, Any] = {}
-    if coordinator is not None:
-        coordinator_timing = {
-            "last_update_success": coordinator.last_update_success,
-            "last_update_success_time": (
-                coordinator.last_update_success_time.isoformat()
-                if coordinator.last_update_success_time is not None
-                else None
-            ),
-            "update_interval_s": (
-                coordinator.update_interval.total_seconds()
-                if coordinator.update_interval is not None
-                else None
-            ),
-            "controller_enabled": coordinator.controller_enabled,
-            "safe_state_applied": coordinator.safe_state_applied,
-        }
-
-    health_snapshot = (
-        dict(coordinator.health_snapshot)
-        if coordinator is not None and coordinator.health_snapshot
-        else {}
-    )
-    grid_inputs = list(health_snapshot.get("grid_inputs", []))
-
-    # Battery diagnostics
-    batteries: list[dict[str, Any]] = []
-    if coordinator is not None:
-        batteries = list(health_snapshot.get("batteries", []))
-
-    history: dict[str, Any] = {}
-    if coordinator is not None:
-        history = {
-            "control_cycle_log": coordinator.control_cycle_log,
-            "sensor_health_log": coordinator.sensor_health_log,
-            "battery_response_log": coordinator.battery_response_log,
-            "repair_event_log": coordinator.repair_event_log,
-            "calibration_log": coordinator.calibration_log,
-        }
-
-    ent_reg = er.async_get(hass)
-    entities = [
-        {
-            "entity_id": e.entity_id,
-            "unique_id": e.unique_id,
-            "state": (s := hass.states.get(e.entity_id)) and s.state,
-        }
-        for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
-    ]
+    """Return diagnostics for a config entry."""
+    coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
+    result = coordinator.data
 
     return {
-        "config_entry": {
-            "entry_id": entry.entry_id,
-            "title": entry.title,
-            "data": async_redact_data(dict(entry.data), TO_REDACT),
-            "options": async_redact_data(dict(entry.options), TO_REDACT),
-            "subentries": {
-                sub.title: {
-                    "type": sub.subentry_type,
-                    "data": async_redact_data(dict(sub.data), TO_REDACT),
-                }
-                for sub in entry.subentries.values()
-            },
+        "status": result.status if result else None,
+        "grid_raw_w": result.grid_raw_w if result else None,
+        "grid_filtered_w": result.grid_filtered_w if result else None,
+        "pid_output_w": result.pid_output_w if result else None,
+        "setpoints": dict(result.setpoints) if result else {},
+        "battery_setpoints": dict(result.battery_setpoints) if result else {},
+        "pid": {
+            "kp": coordinator._pid.kp,
+            "ki": coordinator._pid.ki,
+            "kd": coordinator._pid.kd,
+            "integral": round(coordinator._pid.integral, 3),
         },
-        "coordinator": coord_data,
-        "health": health_snapshot,
-        "grid_inputs": grid_inputs,
-        "control_state": control_state,
-        "coordinator_timing": coordinator_timing,
-        "pid": pid_state,
-        "arrays": array_configs,
-        "batteries": batteries,
-        "override_setpoints": override_setpoints,
-        "settling_state": settling_state,
-        "estimators": estimator_states,
-        "repair_issues": repair_issues,
-        "history": history,
-        "entities": entities,
+        "arrays": [
+            {
+                "name": a.name,
+                "output_type": a.output_type,
+                "setpoint_min": a.setpoint_min,
+                "setpoint_max": a.setpoint_max,
+                "w_per_unit": a.w_per_unit,
+                "settling_time_s": a.settling_time_s,
+                "calibration_confidence": a.calibration_confidence,
+            }
+            for a in coordinator.arrays
+        ],
+        "batteries": [
+            {
+                "name": b.name,
+                "max_charge_w": b.max_charge_w,
+                "max_discharge_w": b.max_discharge_w,
+            }
+            for b in coordinator.batteries
+        ],
+        "config": {
+            "deadband_w": coordinator._deadband_w,
+            "ewm_alpha": coordinator._ewm_alpha,
+            "aggressiveness": coordinator._aggressiveness,
+            "enable_entity": coordinator._enable_entity,
+        },
     }

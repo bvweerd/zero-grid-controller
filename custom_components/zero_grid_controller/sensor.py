@@ -10,19 +10,14 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfPower
+from homeassistant.const import EntityCategory, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    ARRAY_SUBENTRY_TYPE,
-    BATTERY_SUBENTRY_TYPE,
-    OUTPUT_TYPE_PERCENT,
-    OUTPUT_TYPE_WATT,
-)
-from .coordinator import ZeroGridCoordinator
+from .const import ARRAY_SUBENTRY_TYPE, BATTERY_SUBENTRY_TYPE
+from .coordinator import ZeroGridCoordinator, ZGCResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +29,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up sensor entities for the main device and per-array subentry devices."""
+    """Set up sensor entities."""
     coordinator: ZeroGridCoordinator = entry.runtime_data.coordinator
     main_device: DeviceInfo = entry.runtime_data.device
     array_devices: dict[str, DeviceInfo] = entry.runtime_data.array_devices
@@ -45,12 +40,7 @@ async def async_setup_entry(
             ZGCGridRawSensor(coordinator, entry, main_device),
             ZGCGridFilteredSensor(coordinator, entry, main_device),
             ZGCPIDOutputSensor(coordinator, entry, main_device),
-            ZGCPIDComponentSensor(coordinator, entry, main_device, "p"),
-            ZGCPIDComponentSensor(coordinator, entry, main_device, "i"),
-            ZGCPIDComponentSensor(coordinator, entry, main_device, "d"),
-            ZGCModeSensor(coordinator, entry, main_device),
             ZGCStatusSensor(coordinator, entry, main_device),
-            ZGCLearningSensor(coordinator, entry, main_device),
         ]
     )
 
@@ -65,15 +55,6 @@ async def async_setup_entry(
                     ZGCArraySetpointSensor(
                         coordinator, entry, device, subentry.subentry_id, array_name
                     ),
-                    ZGCArrayClippingSensor(
-                        coordinator, entry, device, subentry.subentry_id, array_name
-                    ),
-                    ZGCArrayGainSensor(
-                        coordinator, entry, device, subentry.subentry_id, array_name
-                    ),
-                    ZGCArrayCalibrationSensor(
-                        coordinator, entry, device, subentry.subentry_id, array_name
-                    ),
                 ],
                 config_subentry_id=subentry.subentry_id,
             )
@@ -85,12 +66,8 @@ async def async_setup_entry(
             async_add_entities(
                 [
                     ZGCBatterySetpointSensor(
-                        coordinator,
-                        entry,
-                        device,
-                        subentry.subentry_id,
-                        battery_name,
-                    )
+                        coordinator, entry, device, subentry.subentry_id, battery_name
+                    ),
                 ],
                 config_subentry_id=subentry.subentry_id,
             )
@@ -102,23 +79,20 @@ async def async_setup_entry(
 
 
 class ZGCSensorBase(CoordinatorEntity[ZeroGridCoordinator], SensorEntity):
-    """Base for all ZGC sensor entities."""
+    """Base class for Zero Grid Controller sensors."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
-        key: str,
     ) -> None:
         super().__init__(coordinator)
         self._entry = entry
-        self._key = key
-        self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_device_info = device
-        self._attr_translation_key = key
 
 
 # ---------------------------------------------------------------------------
@@ -129,138 +103,70 @@ class ZGCSensorBase(CoordinatorEntity[ZeroGridCoordinator], SensorEntity):
 class ZGCGridRawSensor(ZGCSensorBase):
     """Raw (unfiltered) grid power sensor."""
 
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_translation_key = "grid_raw_w"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
 
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, "grid_raw_w")
+    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_grid_raw_w"
 
     @property
     def native_value(self) -> float | None:
-        if self.coordinator.data is None:
-            return None
-        val: float = self.coordinator.data.grid_raw_w
-        return round(val, 1)
+        result: ZGCResult | None = self.coordinator.data
+        return round(result.grid_raw_w, 1) if result else None
 
 
 class ZGCGridFilteredSensor(ZGCSensorBase):
-    """EWM-filtered grid power sensor (primary)."""
+    """Filtered grid power sensor."""
 
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_translation_key = "grid_filtered_w"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
 
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, "grid_filtered_w")
+    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_grid_filtered_w"
 
     @property
     def native_value(self) -> float | None:
-        if self.coordinator.data is None:
-            return None
-        val: float = self.coordinator.data.grid_filtered_w
-        return round(val, 1)
+        result: ZGCResult | None = self.coordinator.data
+        return round(result.grid_filtered_w, 1) if result else None
 
 
 class ZGCPIDOutputSensor(ZGCSensorBase):
-    """Total PID output in Watts."""
+    """PID output (setpoint adjustment) sensor."""
 
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_translation_key = "pid_output_w"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
 
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, "pid_output_w")
+    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_pid_output_w"
 
     @property
     def native_value(self) -> float | None:
-        if self.coordinator.data is None:
-            return None
-        val: float = self.coordinator.data.pid_output_w
-        return round(val, 1)
-
-
-class ZGCPIDComponentSensor(ZGCSensorBase):
-    """P, I or D component sensor."""
-
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        component: str,  # "p", "i" or "d"
-    ) -> None:
-        super().__init__(coordinator, entry, device, f"pid_{component}_w")
-        self._component = component
-
-    @property
-    def native_value(self) -> float | None:
-        if self.coordinator.data is None:
-            return None
-        attr = f"pid_{self._component}_w"
-        val = getattr(self.coordinator.data, attr, None)
-        return round(val, 2) if val is not None else None
-
-
-class ZGCModeSensor(ZGCSensorBase):
-    """Controller mode sensor."""
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, "mode")
-
-    @property
-    def native_value(self) -> str | None:
-        if self.coordinator.data is None:
-            return None
-        return str(self.coordinator.data.mode)
+        result: ZGCResult | None = self.coordinator.data
+        return round(result.pid_output_w, 1) if result else None
 
 
 class ZGCStatusSensor(ZGCSensorBase):
-    """Current controller status."""
+    """Controller status sensor."""
 
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, "status")
+    _attr_translation_key = "status"
 
-    @property
-    def native_value(self) -> str | None:
-        if self.coordinator.data is None:
-            return None
-        return str(self.coordinator.data.status)
-
-
-class ZGCLearningSensor(ZGCSensorBase):
-    """Self-tuning learning status sensor."""
-
-    def __init__(
-        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
-    ) -> None:
-        super().__init__(coordinator, entry, device, "learning_status")
+    def __init__(self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_status"
 
     @property
     def native_value(self) -> str | None:
-        if self.coordinator.data is None:
-            return None
-        return str(self.coordinator.data.learning_status)
+        result: ZGCResult | None = self.coordinator.data
+        return result.status if result else None
 
 
 # ---------------------------------------------------------------------------
@@ -268,139 +174,31 @@ class ZGCLearningSensor(ZGCSensorBase):
 # ---------------------------------------------------------------------------
 
 
-class ZGCArraySensorBase(ZGCSensorBase):
-    """Base for per-array sensors."""
+class ZGCArraySetpointSensor(ZGCSensorBase):
+    """Current setpoint for a PV array."""
+
+    _attr_translation_key = "array_setpoint"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
         coordinator: ZeroGridCoordinator,
         entry: ConfigEntry,
         device: DeviceInfo,
-        key: str,
         subentry_id: str,
         array_name: str,
     ) -> None:
-        super().__init__(coordinator, entry, device, f"{subentry_id}_{key}")
+        super().__init__(coordinator, entry, device)
         self._array_name = array_name
-        # Override translation key to use the generic per-array key
-        self._attr_translation_key = key
-
-
-class ZGCArraySetpointSensor(ZGCArraySensorBase):
-    """Current setpoint for an array."""
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_registry_enabled_default = True
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator, entry, device, "array_setpoint", subentry_id, array_name
-        )
-
-    @property
-    def native_unit_of_measurement(self) -> str | None:
-        """Return unit based on the array's output type."""
-        array = self.coordinator.get_array(self._array_name)
-        if array is None:
-            return None
-        if array.output_type == OUTPUT_TYPE_PERCENT:
-            return PERCENTAGE
-        if array.output_type == OUTPUT_TYPE_WATT:
-            return UnitOfPower.WATT
-        return None  # switch type has no numeric unit
+        self._attr_unique_id = f"{entry.entry_id}_{subentry_id}_setpoint"
 
     @property
     def native_value(self) -> float | None:
-        if self.coordinator.data is None:
+        result: ZGCResult | None = self.coordinator.data
+        if result is None:
             return None
-        sp = self.coordinator.data.setpoints.get(self._array_name)
-        return round(sp, 1) if sp is not None else None
-
-
-class ZGCArrayClippingSensor(ZGCArraySensorBase):
-    """PV clipping status for an array."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator, entry, device, "array_clipping", subentry_id, array_name
-        )
-
-    @property
-    def native_value(self) -> str | None:
-        if self.coordinator.data is None:
-            return None
-        clipping = self.coordinator.data.array_clipping.get(self._array_name)
-        return "on" if clipping else "off"
-
-
-class ZGCArrayGainSensor(ZGCArraySensorBase):
-    """Estimated system gain K for an array."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator, entry, device, "array_gain_k", subentry_id, array_name
-        )
-
-    @property
-    def native_value(self) -> float | None:
-        if self.coordinator.data is None:
-            return None
-        k = self.coordinator.data.array_gain_k.get(self._array_name)
-        return round(k, 3) if k is not None else None
-
-
-class ZGCArrayCalibrationSensor(ZGCArraySensorBase):
-    """Calibration confidence level for an array."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(
-        self,
-        coordinator: ZeroGridCoordinator,
-        entry: ConfigEntry,
-        device: DeviceInfo,
-        subentry_id: str,
-        array_name: str,
-    ) -> None:
-        super().__init__(
-            coordinator, entry, device, "array_calibration", subentry_id, array_name
-        )
-
-    @property
-    def native_value(self) -> str | None:
-        if self.coordinator.data is None:
-            return None
-        cal: str | None = self.coordinator.data.array_calibration.get(self._array_name)
-        return cal
+        sp = result.setpoints.get(self._array_name)
+        return round(sp, 2) if sp is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -409,12 +207,12 @@ class ZGCArrayCalibrationSensor(ZGCArraySensorBase):
 
 
 class ZGCBatterySetpointSensor(ZGCSensorBase):
-    """Current setpoint target for a battery (in Watts, positive = discharging)."""
+    """Current setpoint written to a battery."""
 
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_translation_key = "battery_setpoint"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_registry_enabled_default = True
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
 
     def __init__(
         self,
@@ -424,13 +222,14 @@ class ZGCBatterySetpointSensor(ZGCSensorBase):
         subentry_id: str,
         battery_name: str,
     ) -> None:
-        super().__init__(coordinator, entry, device, f"{subentry_id}_battery_setpoint")
+        super().__init__(coordinator, entry, device)
         self._battery_name = battery_name
-        self._attr_translation_key = "battery_setpoint"
+        self._attr_unique_id = f"{entry.entry_id}_{subentry_id}_battery_setpoint"
 
     @property
     def native_value(self) -> float | None:
-        if self.coordinator.data is None:
+        result: ZGCResult | None = self.coordinator.data
+        if result is None:
             return None
-        sp = self.coordinator.data.battery_setpoints.get(self._battery_name)
+        sp = result.battery_setpoints.get(self._battery_name)
         return round(sp, 1) if sp is not None else None

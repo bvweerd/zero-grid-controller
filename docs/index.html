@@ -5,10 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Zero Grid Controller Analyzer</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   body { background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%); }
-  .chart-container { position: relative; height: 260px; }
   .drop-zone.drag-over { border-color: #0f766e; background: #ecfeff; }
   .kv-row { display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.35rem 0; }
   .kv-label { color: #6b7280; font-size: 0.8125rem; }
@@ -28,41 +26,39 @@
 </style>
 </head>
 <body class="text-slate-900 min-h-screen">
-<main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
+<main class="max-w-5xl mx-auto px-4 py-8 space-y-6">
   <header class="bg-white/90 backdrop-blur rounded-2xl border border-slate-200 p-6 shadow-sm">
     <h1 class="text-3xl font-black tracking-tight">Zero Grid Controller Analyzer</h1>
-    <p class="text-sm text-slate-500 mt-1">Upload or paste diagnostics JSON from Home Assistant and inspect control-loop health offline.</p>
+    <p class="text-sm text-slate-500 mt-1">Upload or paste a diagnostics JSON snapshot from Home Assistant to inspect your controller state.</p>
   </header>
 
   <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
     <div id="drop-zone" class="drop-zone border-2 border-dashed border-slate-300 rounded-2xl p-10 text-center cursor-pointer transition-colors">
-      <div class="text-5xl mb-3">%</div>
-      <div class="text-lg font-semibold">Drop `diagnostics.json` here</div>
+      <div class="text-5xl mb-3">⚡</div>
+      <div class="text-lg font-semibold">Drop <code>diagnostics.json</code> here</div>
       <div class="text-sm text-slate-500 mt-1">or click to browse, or paste JSON below</div>
       <input type="file" id="file-input" accept=".json" class="hidden">
     </div>
     <button id="paste-toggle" class="mt-4 text-sm font-medium text-teal-700 hover:underline">Toggle pasted JSON</button>
     <div id="paste-area" class="hidden mt-4">
-      <textarea id="json-input" rows="9" class="w-full border border-slate-300 rounded-xl p-3 font-mono text-xs" placeholder="Paste the full diagnostics payload or the inner data object here"></textarea>
+      <textarea id="json-input" rows="9" class="w-full border border-slate-300 rounded-xl p-3 font-mono text-xs" placeholder="Paste the diagnostics JSON here"></textarea>
       <button id="parse-btn" class="mt-3 px-4 py-2 rounded-xl bg-teal-700 text-white text-sm font-semibold">Analyze</button>
     </div>
     <div id="parse-error" class="hidden mt-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-mono"></div>
   </section>
 
   <section id="dashboard" class="hidden space-y-6">
-    <div class="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Mode</div><div id="summary-mode" class="text-2xl font-black mt-1">—</div></div>
+    <div class="grid gap-4 md:grid-cols-4">
       <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Status</div><div id="summary-status" class="text-2xl font-black mt-1">—</div></div>
       <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Grid filtered</div><div id="summary-grid" class="text-2xl font-black mt-1">—</div></div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Residual</div><div id="summary-residual" class="text-2xl font-black mt-1">—</div></div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Active repairs</div><div id="summary-repairs" class="text-2xl font-black mt-1">—</div></div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Unresponsive batteries</div><div id="summary-batteries" class="text-2xl font-black mt-1">—</div></div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">PID output</div><div id="summary-pid" class="text-2xl font-black mt-1">—</div></div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Arrays</div><div id="summary-arrays" class="text-2xl font-black mt-1">—</div></div>
     </div>
 
     <div class="grid gap-4 lg:grid-cols-3">
       <div class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Health</h2>
-        <div id="health-list"></div>
+        <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">PID &amp; Config</h2>
+        <div id="pid-list"></div>
       </div>
       <div class="bg-white rounded-2xl border border-slate-200 p-5 lg:col-span-2">
         <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Recommendations</h2>
@@ -70,32 +66,20 @@
       </div>
     </div>
 
-    <div class="grid gap-4 lg:grid-cols-2">
-      <div class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Grid Control History</h2>
-        <div class="chart-container"><canvas id="chart-grid"></canvas></div>
-      </div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Battery Verification History</h2>
-        <div class="chart-container"><canvas id="chart-battery"></canvas></div>
-      </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 overflow-auto">
+      <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">PV Arrays</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Setpoint</th><th>Range</th><th>W/unit</th><th>Settling</th><th>Calibration</th></tr></thead>
+        <tbody id="arrays-table"></tbody>
+      </table>
     </div>
 
-    <div class="grid gap-4 lg:grid-cols-2">
-      <div class="bg-white rounded-2xl border border-slate-200 p-5 overflow-auto">
-        <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Grid Inputs</h2>
-        <table>
-          <thead><tr><th>Entity</th><th>Role</th><th>Status</th><th>Value</th><th>Age s</th></tr></thead>
-          <tbody id="grid-input-table"></tbody>
-        </table>
-      </div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-5 overflow-auto">
-        <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Batteries</h2>
-        <table>
-          <thead><tr><th>Name</th><th>Setpoint W</th><th>Actual W</th><th>Response</th><th>Status</th></tr></thead>
-          <tbody id="battery-table"></tbody>
-        </table>
-      </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 overflow-auto">
+      <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Batteries</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Max charge</th><th>Max discharge</th><th>Current setpoint</th></tr></thead>
+        <tbody id="batteries-table"></tbody>
+      </table>
     </div>
   </section>
 </main>

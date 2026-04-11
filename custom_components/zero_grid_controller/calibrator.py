@@ -1,11 +1,10 @@
-"""Automatic step-response calibration for PV arrays."""
+"""Automatic step-response calibration for numeric PV arrays."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from collections import deque
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -13,29 +12,21 @@ from homeassistant.core import HomeAssistant
 
 from .array import ArrayConfig
 from .const import (
+    AGGRESSIVENESS_FACTORS,
+    AGGRESSIVENESS_KI_RATIO,
     CALIB_BASELINE_SAMPLES,
-    CALIB_DEFAULT_FAIL_SETTLING_S,
-    CALIB_GRID_VARIANCE_FACTOR,
     CALIB_INTER_ARRAY_SLEEP_S,
     CALIB_MAX_GRID_W,
     CALIB_MAX_TIME_S,
-    CALIB_MIN_PV_W,
     CALIB_MIN_W_PER_UNIT,
-    CALIB_NO_PV_SENSOR_NOTE,
-    CALIB_PV_SENSOR_MAX_WAIT_S,
     CALIB_SETTLING_CONFIRM_COUNT,
     CALIB_SETTLING_MAX_S,
     CALIB_SETTLING_MIN_S,
     CALIB_SETTLING_THRESHOLD_W,
-    CALIB_STABLE_VARIANCE_PCT,
-    CALIB_STABLE_WINDOW_S,
     CALIB_STEP_MAX,
     CALIB_STEP_MIN,
     CALIB_STEP_RATIO,
-    CALIBRATION_CONFIDENCE_ESTIMATED,
-    DEFAULT_SETTLING_TIME_S,
-    DEFAULT_W_PER_UNIT,
-    OUTPUT_TYPE_SWITCH,
+    CONTROL_INTERVAL_S,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,471 +34,194 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class CalibrationResult:
-    """Result from a single array calibration run."""
+    """Result for one PV array calibration."""
 
+    array_name: str
+    success: bool
     w_per_unit: float
     settling_time_s: int
-    confidence: str  # "measured" | "estimated" | "failed"
-    notes: str  # human-readable explanation for the user
+    kp: float
+    ki: float
+    message: str = ""
+
+
+ReadGridFn = Callable[[], Awaitable[float | None]]
+WriteSetpointFn = Callable[[ArrayConfig, float], Awaitable[None]]
 
 
 class ArrayCalibrator:
-    """Automatic step-response measurement for PV arrays.
+    """Calibrates numeric PV arrays via a step-response test."""
 
-    Procedure per array:
-    1. Wait for stable conditions (PV variance < 5% over 30 s, or simply 30 s).
-    2. Measure baseline grid_w (average of 10 samples at 1 s intervals).
-    3. Send a test step: setpoint − STEP_SIZE units.
-       Always clamped within [setpoint_min, setpoint_max].
-    4. Measure grid_w every second.
-    5. Detect settling: |grid_w_avg − new_baseline| < 5 W for 3 consecutive samples.
-    6. Calculate:
-         w_per_unit = abs(new_baseline − old_baseline) / STEP_SIZE
-         settling_time_s = time to settling (clamped to [3, 60])
-    7. Restore original setpoint, wait 30 s before next array.
-
-    Safety:
-    - Never step outside configured min/max.
-    - Maximum 3 minutes per array.
-    - Abort if grid_w goes outside ±3000 W.
-    - On timeout/error: conservative defaults, confidence = "estimated".
-    """
-
-    def __init__(self) -> None:
-        self._abort = False
-
-    def abort(self) -> None:
-        """Signal that calibration should stop at the next safe point."""
-        self._abort = True
-
-    async def run(
+    def __init__(
         self,
         hass: HomeAssistant,
         arrays: list[ArrayConfig],
-        read_grid: Callable[[], float | None],
-        write_setpoint: Callable[[ArrayConfig, float], Awaitable[None]],
-        progress_callback: Callable[[str, float], None],
-        *,
-        calib_max_grid_w: float = CALIB_MAX_GRID_W,
-        calib_stable_variance_pct: float = CALIB_STABLE_VARIANCE_PCT,
-        calib_stable_window_s: int = CALIB_STABLE_WINDOW_S,
-        calib_baseline_samples: int = CALIB_BASELINE_SAMPLES,
-        calib_settling_confirm_count: int = CALIB_SETTLING_CONFIRM_COUNT,
-        calib_settling_threshold_w: float = CALIB_SETTLING_THRESHOLD_W,
-        calib_min_pv_w: float = CALIB_MIN_PV_W,
-        calib_grid_variance_factor: float = CALIB_GRID_VARIANCE_FACTOR,
-        calib_inter_array_sleep_s: float = CALIB_INTER_ARRAY_SLEEP_S,
-        calib_pv_sensor_max_wait_s: float = CALIB_PV_SENSOR_MAX_WAIT_S,
-    ) -> dict[str, CalibrationResult]:
-        """Run calibration for all arrays and return results keyed by array name."""
-        results: dict[str, CalibrationResult] = {}
-        n = len(arrays)
+        current_setpoints: dict[str, float],
+        aggressiveness: str,
+        read_grid: ReadGridFn,
+        write_setpoint: WriteSetpointFn,
+    ) -> None:
+        self._hass = hass
+        self._arrays = arrays
+        self._current_setpoints = current_setpoints
+        self._aggressiveness = aggressiveness
+        self._read_grid = read_grid
+        self._write_setpoint = write_setpoint
+        self._abort = False
 
-        for i, array in enumerate(arrays):
+    def abort(self) -> None:
+        """Signal the calibration to stop after the current array."""
+        self._abort = True
+
+    async def run(self) -> list[CalibrationResult]:
+        """Calibrate all numeric arrays sequentially."""
+        results: list[CalibrationResult] = []
+        numeric = [a for a in self._arrays if not a.is_switch]
+
+        for i, array in enumerate(numeric):
             if self._abort:
                 break
+            if i > 0:
+                _LOGGER.debug("Waiting %d s between arrays", CALIB_INTER_ARRAY_SLEEP_S)
+                await asyncio.sleep(CALIB_INTER_ARRAY_SLEEP_S)
 
-            base_progress = i / n
-            progress_callback(
-                f"calibration_measuring:{array.name}:{i + 1}/{n}",
-                base_progress,
-            )
-
-            result = await self._calibrate_array(
-                hass,
-                array,
-                read_grid,
-                write_setpoint,
-                lambda msg, p, bp=base_progress: progress_callback(msg, bp + p / n),  # type: ignore[misc]
-                calib_max_grid_w=calib_max_grid_w,
-                calib_stable_variance_pct=calib_stable_variance_pct,
-                calib_stable_window_s=calib_stable_window_s,
-                calib_baseline_samples=calib_baseline_samples,
-                calib_settling_confirm_count=calib_settling_confirm_count,
-                calib_settling_threshold_w=calib_settling_threshold_w,
-                calib_min_pv_w=calib_min_pv_w,
-                calib_grid_variance_factor=calib_grid_variance_factor,
-                calib_pv_sensor_max_wait_s=calib_pv_sensor_max_wait_s,
-            )
-            results[array.name] = result
+            result = await self._calibrate_array(array)
+            results.append(result)
             _LOGGER.info(
-                "Calibration %s: %s — %.0f W/unit, %d s settling (confidence: %s)",
+                "Calibration %s for %s: w_per_unit=%.2f, settling=%d s",
+                "OK" if result.success else "FAILED",
                 array.name,
-                result.notes,
                 result.w_per_unit,
                 result.settling_time_s,
-                result.confidence,
             )
 
-            # Wait before next array to let grid stabilise
-            if i < n - 1 and not self._abort:
-                await asyncio.sleep(calib_inter_array_sleep_s)
-
-        progress_callback("calibration_complete", 1.0)
         return results
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    async def _calibrate_array(self, array: ArrayConfig) -> CalibrationResult:
+        """Run step-response test for one array."""
+        start_sp = self._current_setpoints.get(array.name, array.setpoint_max)
 
-    async def _calibrate_array(
-        self,
-        hass: HomeAssistant,
-        array: ArrayConfig,
-        read_grid: Callable[[], float | None],
-        write_setpoint: Callable[[ArrayConfig, float], Awaitable[None]],
-        progress_callback: Callable[[str, float], None],
-        *,
-        calib_max_grid_w: float = CALIB_MAX_GRID_W,
-        calib_stable_variance_pct: float = CALIB_STABLE_VARIANCE_PCT,
-        calib_stable_window_s: int = CALIB_STABLE_WINDOW_S,
-        calib_baseline_samples: int = CALIB_BASELINE_SAMPLES,
-        calib_settling_confirm_count: int = CALIB_SETTLING_CONFIRM_COUNT,
-        calib_settling_threshold_w: float = CALIB_SETTLING_THRESHOLD_W,
-        calib_min_pv_w: float = CALIB_MIN_PV_W,
-        calib_grid_variance_factor: float = CALIB_GRID_VARIANCE_FACTOR,
-        calib_pv_sensor_max_wait_s: float = CALIB_PV_SENSOR_MAX_WAIT_S,
-    ) -> CalibrationResult:
-        """Calibrate a single array. Returns a CalibrationResult.
-
-        When array.pv_power_entity is configured the step response is measured
-        directly on the PV sensor (low noise, σ ≈ 5 W).  Without it the grid
-        sensor is used (high noise, σ ≈ 30 W), which often prevents settling
-        detection and yields a "failed" result.
-        """
-        if array.output_type == OUTPUT_TYPE_SWITCH:
-            return CalibrationResult(
-                w_per_unit=DEFAULT_W_PER_UNIT,
-                settling_time_s=array.settling_time_s,
-                confidence="failed",
-                notes=f"{array.name}: switch outputs are not numerically calibratable.",
-            )
-
-        default = CalibrationResult(
-            w_per_unit=DEFAULT_W_PER_UNIT,
-            settling_time_s=DEFAULT_SETTLING_TIME_S,
-            confidence=CALIBRATION_CONFIDENCE_ESTIMATED,
-            notes="Using default values (calibration not run or insufficient solar output).",
-        )
-
-        use_pv_sensor = array.pv_power_entity is not None
-
-        # --- Step 1: wait for stable conditions ---
-        progress_callback("calibration_waiting_sun", 0.0)
-        stable = await self._wait_for_stable(
-            hass,
-            array,
-            read_grid,
-            calib_stable_variance_pct=calib_stable_variance_pct,
-            calib_stable_window_s=calib_stable_window_s,
-            calib_min_pv_w=calib_min_pv_w,
-            calib_grid_variance_factor=calib_grid_variance_factor,
-        )
-        if not stable:
-            return CalibrationResult(
-                w_per_unit=DEFAULT_W_PER_UNIT,
-                settling_time_s=DEFAULT_SETTLING_TIME_S,
-                confidence="failed",
-                notes=(
-                    "Calibration not possible (insufficient or unstable solar output). "
-                    "Integration starts with default values and learns automatically. "
-                    "Tip: re-run calibration on a sunny day via Settings."
-                ),
-            )
-
-        # --- Step 2: read original setpoint ---
-        original_setpoint = self._read_setpoint(hass, array)
-        if original_setpoint is None:
-            return default
-
-        # --- Step 3: measure baseline ---
-        progress_callback("calibration_measuring_baseline", 0.1)
-        if use_pv_sensor:
-            assert (
-                array.pv_power_entity is not None
-            )  # guaranteed by use_pv_sensor check
-            baseline = await self._measure_pv_avg(
-                hass,
-                array.pv_power_entity,
-                samples=calib_baseline_samples,
-                max_wait_s=calib_pv_sensor_max_wait_s,
-            )
-            # If PV sensor appears to be frozen (slow API), fall back to grid
-            if baseline is None:
-                _LOGGER.warning(
-                    "Array %s: PV sensor did not update during baseline; falling back to grid signal",
-                    array.name,
+        step = int(
+            math.floor(
+                max(
+                    CALIB_STEP_MIN,
+                    min(
+                        CALIB_STEP_MAX,
+                        (array.setpoint_max - array.setpoint_min) * CALIB_STEP_RATIO,
+                    ),
                 )
-                use_pv_sensor = False
-                baseline = await self._measure_grid_avg(
-                    read_grid, samples=calib_baseline_samples
-                )
-        else:
-            baseline = await self._measure_grid_avg(
-                read_grid, samples=calib_baseline_samples
             )
-
-        if baseline is None:
-            return default
-
-        # --- Step 4: compute test step — adaptive: 10 % of usable range, min 2, max 20 units ---
-        usable_range = array.setpoint_max - array.setpoint_min
-        step = max(
-            CALIB_STEP_MIN, min(CALIB_STEP_MAX, int(usable_range * CALIB_STEP_RATIO))
         )
-        test_setpoint = max(
-            array.setpoint_min,
-            min(array.setpoint_max, original_setpoint - step),
-        )
-        if abs(test_setpoint - original_setpoint) < 1:
-            # No room to tighten — try opening instead
-            test_setpoint = min(
-                array.setpoint_max,
-                max(array.setpoint_min, original_setpoint + step),
-            )
-        if abs(test_setpoint - original_setpoint) < 1:
-            _LOGGER.warning(
-                "Array %s has no room to step (min=%.0f max=%.0f current=%.0f)",
-                array.name,
-                array.setpoint_min,
-                array.setpoint_max,
-                original_setpoint,
-            )
-            return default
 
-        # Apply test step
-        progress_callback("calibration_step_sent", 0.3)
-        await write_setpoint(array, test_setpoint)
-        step_size = abs(test_setpoint - original_setpoint)
+        # 1. Measure baseline grid
+        baseline_samples: list[float] = []
+        for _ in range(CALIB_BASELINE_SAMPLES):
+            g = await self._read_grid()
+            if g is None:
+                return self._failed(array, "Grid sensor unavailable during baseline")
+            if abs(g) > CALIB_MAX_GRID_W:
+                return self._failed(array, f"Grid too far from zero ({g:.0f} W)")
+            baseline_samples.append(g)
+            await asyncio.sleep(CONTROL_INTERVAL_S)
 
-        # --- Step 5: measure response ---
-        start_t = time.monotonic()
-        recent: deque[float] = deque(maxlen=calib_settling_confirm_count)
-        settled = False
-        new_baseline = baseline
+        baseline = sum(baseline_samples) / len(baseline_samples)
+        _LOGGER.debug("%s: baseline grid = %.1f W", array.name, baseline)
+
+        # 2. Apply step (curtail: lower setpoint → less PV → more import)
+        step_sp = max(array.setpoint_min, start_sp - step)
+        if step_sp == start_sp:
+            return self._failed(array, "Setpoint already at minimum, cannot step")
+
+        await self._write_setpoint(array, step_sp)
+        self._current_setpoints[array.name] = step_sp
+        _LOGGER.debug("%s: step %.1f → %.1f", array.name, start_sp, step_sp)
+
+        # 3. Wait for settling: grid must have moved AND stabilised
+        #    "Stable" = last CONFIRM_COUNT readings all within THRESHOLD W of each other
         elapsed = 0.0
+        window: list[float] = []
+        settling_start: float | None = None
 
-        while elapsed < CALIB_MAX_TIME_S and not self._abort:
-            await asyncio.sleep(1.0)
-            elapsed = time.monotonic() - start_t
+        while elapsed < CALIB_MAX_TIME_S:
+            await asyncio.sleep(CONTROL_INTERVAL_S)
+            elapsed += CONTROL_INTERVAL_S
 
-            # Safety check always uses grid
-            grid_w = read_grid()
-            if grid_w is not None and abs(grid_w) > calib_max_grid_w:
-                _LOGGER.warning(
-                    "Grid measurement %.0f W exceeds safety limit; aborting calibration for %s",
-                    grid_w,
-                    array.name,
-                )
-                await write_setpoint(array, original_setpoint)
-                return default
+            g = await self._read_grid()
+            if g is None:
+                break
 
-            # Choose measurement signal
-            if use_pv_sensor:
-                signal = self._read_pv_safe(hass, array.pv_power_entity)  # type: ignore[arg-type]
-            else:
-                signal = grid_w
+            window.append(g)
+            if len(window) > CALIB_SETTLING_CONFIRM_COUNT:
+                window.pop(0)
 
-            if signal is None:
-                continue
+            # Record when grid first moves from baseline
+            if abs(g - baseline) > CALIB_SETTLING_THRESHOLD_W and settling_start is None:
+                settling_start = elapsed
 
-            recent.append(signal)
-            # Only start checking after the inverter settling time has elapsed
+            # Settled = window full AND range within threshold AND moved from baseline
             if (
-                elapsed >= array.settling_time_s
-                and len(recent) == calib_settling_confirm_count
+                len(window) == CALIB_SETTLING_CONFIRM_COUNT
+                and (max(window) - min(window)) < CALIB_SETTLING_THRESHOLD_W
+                and abs(sum(window) / len(window) - baseline) > CALIB_SETTLING_THRESHOLD_W
             ):
-                avg = sum(recent) / len(recent)
-                if all(abs(v - avg) < calib_settling_threshold_w for v in recent):
-                    new_baseline = avg
-                    settled = True
-                    break
+                break
 
-            progress_callback(
-                "calibration_step_sent", 0.3 + 0.6 * (elapsed / CALIB_MAX_TIME_S)
-            )
+        settled_values = window
 
-        # --- Step 6: restore and compute results ---
-        await write_setpoint(array, original_setpoint)
+        # 4. Restore original setpoint
+        await self._write_setpoint(array, start_sp)
+        self._current_setpoints[array.name] = start_sp
+
+        # Check settled: window full AND range within threshold AND moved from baseline
+        settled = (
+            len(settled_values) == CALIB_SETTLING_CONFIRM_COUNT
+            and (max(settled_values) - min(settled_values)) < CALIB_SETTLING_THRESHOLD_W
+            and abs(sum(settled_values) / len(settled_values) - baseline) > CALIB_SETTLING_THRESHOLD_W
+        ) if settled_values else False
 
         if not settled:
-            return CalibrationResult(
-                w_per_unit=DEFAULT_W_PER_UNIT,
-                settling_time_s=CALIB_DEFAULT_FAIL_SETTLING_S,
-                confidence="failed",
-                notes=f"{array.name}: no response detected, using default values.",
-            )
+            return self._failed(array, "Inverter did not settle within timeout")
 
-        w_per_unit = abs(new_baseline - baseline) / step_size
-        settling_time_s = max(
-            CALIB_SETTLING_MIN_S, min(CALIB_SETTLING_MAX_S, int(elapsed))
-        )
+        # 5. Compute results
+        delta_grid = sum(settled_values) / len(settled_values) - baseline
+        w_per_unit = abs(delta_grid) / step
 
         if w_per_unit < CALIB_MIN_W_PER_UNIT:
-            return CalibrationResult(
-                w_per_unit=DEFAULT_W_PER_UNIT,
-                settling_time_s=settling_time_s,
-                confidence="failed",
-                notes=f"{array.name}: response too small to measure reliably.",
-            )
+            return self._failed(array, f"Response too small: {w_per_unit:.2f} W/unit")
 
-        progress_callback("calibration_result", 0.95)
-        notes = (
-            f"{array.name}: {w_per_unit:.0f} W/step, "
-            f"{settling_time_s}s response time"
-            f"{' (PV sensor)' if use_pv_sensor else ' (grid sensor — add PV sensor for accuracy)'}."
+        settling_time_s = int(
+            max(
+                CALIB_SETTLING_MIN_S,
+                min(CALIB_SETTLING_MAX_S, settling_start or elapsed),
+            )
         )
-        if not use_pv_sensor:
-            notes += f" {CALIB_NO_PV_SENSOR_NOTE}"
+
+        kp, ki = self._compute_gains(w_per_unit)
         return CalibrationResult(
+            array_name=array.name,
+            success=True,
             w_per_unit=w_per_unit,
             settling_time_s=settling_time_s,
-            confidence="measured",
-            notes=notes,
+            kp=kp,
+            ki=ki,
         )
 
-    async def _wait_for_stable(
-        self,
-        hass: HomeAssistant,
-        array: ArrayConfig,
-        read_grid: Callable[[], float | None],
-        *,
-        calib_stable_variance_pct: float = CALIB_STABLE_VARIANCE_PCT,
-        calib_stable_window_s: int = CALIB_STABLE_WINDOW_S,
-        calib_min_pv_w: float = CALIB_MIN_PV_W,
-        calib_grid_variance_factor: float = CALIB_GRID_VARIANCE_FACTOR,
-    ) -> bool:
-        """Wait up to _STABLE_WINDOW_S for stable PV output.
+    def _compute_gains(self, w_per_unit: float) -> tuple[float, float]:
+        """Compute Kp and Ki from calibrated gain and aggressiveness."""
+        factor = AGGRESSIVENESS_FACTORS.get(self._aggressiveness, 1.0)
+        kp = factor / w_per_unit
+        ki = kp * AGGRESSIVENESS_KI_RATIO
+        return round(kp, 4), round(ki, 5)
 
-        Returns True if conditions are suitable for calibration.
-        """
-        if array.pv_power_entity is None:
-            # No PV sensor — check grid stability instead of blindly waiting
-            grid_samples: deque[float] = deque(maxlen=calib_stable_window_s)
-            for _ in range(calib_stable_window_s):
-                val = read_grid()
-                if val is not None:
-                    grid_samples.append(val)
-                await asyncio.sleep(1.0)
-            if len(grid_samples) < calib_stable_window_s // 2:
-                return False
-            avg = sum(grid_samples) / len(grid_samples)
-            variance_pct = (
-                (max(grid_samples) - min(grid_samples)) / max(abs(avg), 1.0) * 100
-            )
-            # Grid is inherently noisier than PV; allow CALIB_GRID_VARIANCE_FACTOR× the PV variance threshold
-            return variance_pct < (
-                calib_stable_variance_pct * calib_grid_variance_factor
-            )
-
-        samples: deque[float] = deque(maxlen=calib_stable_window_s)
-        deadline = time.monotonic() + calib_stable_window_s * 2
-
-        while time.monotonic() < deadline:
-            state = hass.states.get(array.pv_power_entity)
-            if state and state.state not in ("unknown", "unavailable"):
-                try:
-                    pv_w = float(state.state)
-                    samples.append(pv_w)
-                except ValueError:
-                    pass
-
-            if len(samples) >= calib_stable_window_s:
-                avg = sum(samples) / len(samples)
-                if avg < calib_min_pv_w:
-                    return False  # Not enough sun
-                variance_pct = (max(samples) - min(samples)) / avg * 100
-                if variance_pct < calib_stable_variance_pct:
-                    return True
-
-            await asyncio.sleep(1.0)
-
-        return len(samples) >= calib_stable_window_s // 2
-
-    async def _measure_grid_avg(
-        self,
-        read_grid: Callable[[], float | None],
-        samples: int = 10,
-    ) -> float | None:
-        """Measure average grid_w over `samples` seconds."""
-        readings: list[float] = []
-        for _ in range(samples):
-            val = read_grid()
-            if val is not None:
-                readings.append(val)
-            await asyncio.sleep(1.0)
-        if not readings:
-            return None
-        return sum(readings) / len(readings)
-
-    async def _measure_pv_avg(
-        self,
-        hass: HomeAssistant,
-        entity_id: str,
-        samples: int = 10,
-        max_wait_s: float = CALIB_PV_SENSOR_MAX_WAIT_S,
-    ) -> float | None:
-        """Measure average PV power over `samples` distinct sensor updates.
-
-        Handles slow inverter APIs (e.g. SolarEdge 10 s poll) by waiting up to
-        CALIB_PV_SENSOR_MAX_WAIT_S for each new reading instead of counting
-        duplicate stale values.  Returns None if the sensor never updates.
-        """
-        readings: list[float] = []
-        last_changed: object = None
-
-        while len(readings) < samples:
-            state = hass.states.get(entity_id)
-            if state is None or state.state in ("unknown", "unavailable"):
-                await asyncio.sleep(1.0)
-                continue
-
-            if state.last_changed != last_changed:
-                try:
-                    readings.append(float(state.state))
-                    last_changed = state.last_changed
-                except ValueError:
-                    pass
-
-            if len(readings) < samples:
-                # Wait up to CALIB_PV_SENSOR_MAX_WAIT_S for the next update
-                waited = 0.0
-                while waited < max_wait_s:
-                    await asyncio.sleep(1.0)
-                    waited += 1.0
-                    new_state = hass.states.get(entity_id)
-                    if new_state and new_state.last_changed != last_changed:
-                        break
-                else:
-                    # Sensor did not update within the wait window → frozen
-                    _LOGGER.debug(
-                        "PV sensor %s did not update within %d s",
-                        entity_id,
-                        max_wait_s,
-                    )
-                    if not readings:
-                        return None  # never got a single reading
-                    break  # use what we have
-
-        if not readings:
-            return None
-        return sum(readings) / len(readings)
-
-    def _read_pv_safe(self, hass: HomeAssistant, entity_id: str) -> float | None:
-        """Read a PV sensor state synchronously, returning None on any error."""
-        state = hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return None
-        try:
-            return float(state.state)
-        except ValueError:
-            return None
-
-    def _read_setpoint(self, hass: HomeAssistant, array: ArrayConfig) -> float | None:
-        state = hass.states.get(array.setpoint_entity)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return None
-        try:
-            return float(state.state)
-        except ValueError:
-            return None
+    @staticmethod
+    def _failed(array: ArrayConfig, reason: str) -> CalibrationResult:
+        _LOGGER.warning("Calibration failed for %s: %s", array.name, reason)
+        return CalibrationResult(
+            array_name=array.name,
+            success=False,
+            w_per_unit=array.w_per_unit,
+            settling_time_s=array.settling_time_s,
+            kp=0.0,
+            ki=0.0,
+            message=reason,
+        )

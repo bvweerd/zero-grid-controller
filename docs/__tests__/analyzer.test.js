@@ -3,42 +3,41 @@
 const {
   unwrapDiagnostics,
   deriveSummary,
-  buildSeries,
   generateTips,
 } = require('../analyzer');
 
 function samplePayload() {
   return {
     data: {
-      control_state: {
-        mode: 'active',
-        status: 'saturation',
-        grid_filtered_w: 250,
-        residual_w: 180,
-        battery_clipping: false,
-      },
-      repair_issues: [{ issue_id: 'grid_sensor_stale' }],
-      grid_inputs: [
-        { entity_id: 'sensor.grid_import', role: 'import', status: 'stale', age_s: 18.2 },
-        { entity_id: 'sensor.grid_export', role: 'export', status: 'ok', age_s: 0.2 },
+      status: 'active',
+      grid_raw_w: -3716.0,
+      grid_filtered_w: -3813.3,
+      pid_output_w: 2855.5,
+      setpoints: { Zuid: 0.0, West: 45.0 },
+      battery_setpoints: { 'Thuis accu': -2500.0 },
+      pid: { kp: 0.0026, ki: 0.00013, kd: 0.0, integral: 12847.3 },
+      arrays: [
+        {
+          name: 'Zuid',
+          output_type: 'percent',
+          setpoint_min: 0.0,
+          setpoint_max: 100.0,
+          w_per_unit: 38.5,
+          settling_time_s: 12,
+          calibration_confidence: 'measured',
+        },
+        {
+          name: 'West',
+          output_type: 'percent',
+          setpoint_min: 0.0,
+          setpoint_max: 100.0,
+          w_per_unit: 10.0,
+          settling_time_s: 15,
+          calibration_confidence: 'estimated',
+        },
       ],
-      batteries: [
-        { name: 'Home Battery', unresponsive: true, current_setpoint_w: -500, current_power_w: -40, measured_response_factor: 0.2 },
-      ],
-      health: {
-        safe_state_applied: true,
-        mode_guard: { enabled: true, status: 'unmapped' },
-        calibration: { unreliable_arrays: ['Roof West'] },
-      },
-      history: {
-        control_cycle_log: [
-          { timestamp: '2026-04-10T10:00:00Z', grid_raw_w: 300, grid_filtered_w: 250, residual_w: 180, pid_output_w: -40 },
-          { timestamp: '2026-04-10T10:00:05Z', grid_raw_w: 280, grid_filtered_w: 240, residual_w: 160, pid_output_w: -35 },
-        ],
-        battery_response_log: [
-          { timestamp: '2026-04-10T10:00:04Z', commanded_w: -500, actual_w: -40 },
-        ],
-      },
+      batteries: [{ name: 'Thuis accu', max_charge_w: 3600, max_discharge_w: 3600 }],
+      config: { deadband_w: 20.0, ewm_alpha: 0.3, aggressiveness: 'normal', enable_entity: null },
     },
   };
 }
@@ -46,52 +45,74 @@ function samplePayload() {
 describe('unwrapDiagnostics', () => {
   test('accepts HA wrapper payload', () => {
     const result = unwrapDiagnostics(samplePayload());
-    expect(result.control_state.mode).toBe('active');
+    expect(result.status).toBe('active');
   });
 
   test('accepts raw data object', () => {
-    const result = unwrapDiagnostics({ control_state: { mode: 'passive' } });
-    expect(result.control_state.mode).toBe('passive');
+    const result = unwrapDiagnostics({ status: 'deadband' });
+    expect(result.status).toBe('deadband');
+  });
+
+  test('throws on non-object input', () => {
+    expect(() => unwrapDiagnostics(null)).toThrow();
   });
 });
 
 describe('deriveSummary', () => {
   test('derives key counts from diagnostics', () => {
     const summary = deriveSummary(unwrapDiagnostics(samplePayload()));
-    expect(summary.mode).toBe('active');
-    expect(summary.activeRepairs).toBe(1);
-    expect(summary.staleInputs).toBe(1);
-    expect(summary.unresponsiveBatteries).toBe(1);
-    expect(summary.safeStateApplied).toBe(true);
+    expect(summary.status).toBe('active');
+    expect(summary.gridFilteredW).toBeCloseTo(-3813.3);
+    expect(summary.arrayCount).toBe(2);
+    expect(summary.uncalibratedCount).toBe(1);
+    expect(summary.batteryCount).toBe(1);
   });
-});
 
-describe('buildSeries', () => {
-  test('builds chart series from history logs', () => {
-    const series = buildSeries(unwrapDiagnostics(samplePayload()));
-    expect(series.labels).toHaveLength(2);
-    expect(series.gridFiltered[0]).toBe(250);
-    expect(series.batteryCommanded[0]).toBe(-500);
+  test('handles missing arrays gracefully', () => {
+    const summary = deriveSummary({ status: 'disabled' });
+    expect(summary.arrayCount).toBe(0);
+    expect(summary.uncalibratedCount).toBe(0);
   });
 });
 
 describe('generateTips', () => {
-  test('emits high-signal recommendations for detected faults', () => {
-    const tips = generateTips(unwrapDiagnostics(samplePayload()));
-    const titles = tips.map((tip) => tip.title);
-    expect(titles).toContain('Grid sensor updates are too old');
-    expect(titles).toContain('Battery response mismatch');
-    expect(titles).toContain('Fail-safe state is active');
+  test('emits tip for disabled controller', () => {
+    const tips = generateTips({ status: 'disabled', arrays: [], config: {} });
+    const titles = tips.map((t) => t.title);
+    expect(titles).toContain('Controller is disabled');
   });
 
-  test('returns an ok tip when nothing stands out', () => {
+  test('emits tip for uncalibrated arrays', () => {
+    const tips = generateTips(unwrapDiagnostics(samplePayload()));
+    const titles = tips.map((t) => t.title);
+    expect(titles).toContain('Arrays not yet calibrated');
+  });
+
+  test('emits tip for missing grid measurement', () => {
+    const tips = generateTips({ status: 'disabled', grid_filtered_w: null, arrays: [], config: {} });
+    const titles = tips.map((t) => t.title);
+    expect(titles).toContain('No grid measurement available');
+  });
+
+  test('returns ok tip when everything is fine', () => {
     const tips = generateTips({
-      control_state: { mode: 'active', status: 'active' },
-      grid_inputs: [{ entity_id: 'sensor.grid', status: 'ok' }],
-      batteries: [{ name: 'Battery', unresponsive: false }],
-      health: { calibration: { unreliable_arrays: [] }, mode_guard: { enabled: false }, safe_state_applied: false },
+      status: 'active',
+      grid_filtered_w: -5.0,
+      arrays: [{ name: 'Zuid', calibration_confidence: 'measured' }],
+      config: { deadband_w: 20 },
     });
     expect(tips).toHaveLength(1);
     expect(tips[0].level).toBe('ok');
+  });
+
+  test('emits tip for deadband status', () => {
+    const tips = generateTips({
+      status: 'deadband',
+      grid_filtered_w: 3.0,
+      arrays: [],
+      config: { deadband_w: 20 },
+    });
+    const titles = tips.map((t) => t.title);
+    expect(titles).toContain('Grid is within deadband');
   });
 });
