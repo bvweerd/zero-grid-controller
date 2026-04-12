@@ -55,10 +55,12 @@
           "description": "Set the entity and range for this array's power limit.",
           "data": {
             "setpoint_entity": "Entity that sets the power limit",
+            "power_sensor_entity": "Array power sensor",
             "setpoint_min": "Minimum setpoint value",
             "setpoint_max": "Maximum setpoint value"
           },
           "data_description": {
+            "power_sensor_entity": "Per-array power sensor used for 30% → 20% midpoint calibration.",
             "setpoint_min": "The lowest value the controller will ever write (e.g. 0 % or 0 W).",
             "setpoint_max": "The highest value — full output. Calibration uses this range to measure inverter gain."
           }
@@ -170,6 +172,11 @@
         "name": "Setpoint"
       },
       "battery_setpoint": {
+        "name": "Setpoint"
+      }
+    },
+    "binary_sensor": {
+      "array_switch_state": {
         "name": "Setpoint"
       }
     },

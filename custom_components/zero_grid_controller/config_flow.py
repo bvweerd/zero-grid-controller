@@ -27,6 +27,7 @@ from .const import (
     CONF_GRID_IMPORT_SENSORS,
     CONF_NAME,
     CONF_OUTPUT_TYPE,
+    CONF_POWER_SENSOR_ENTITY,
     CONF_SETPOINT_ENTITY,
     CONF_SETPOINT_MAX,
     CONF_SETPOINT_MIN,
@@ -142,6 +143,10 @@ def _array_numeric_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_SETPOINT_ENTITY,
                 default=defaults.get(CONF_SETPOINT_ENTITY, ""),
             ): selector({"entity": {"domain": ["number", "input_number"]}}),
+            vol.Optional(
+                CONF_POWER_SENSOR_ENTITY,
+                default=defaults.get(CONF_POWER_SENSOR_ENTITY, ""),
+            ): _POWER_SENSOR_SINGLE,
             vol.Required(
                 CONF_SETPOINT_MIN,
                 default=defaults.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN),

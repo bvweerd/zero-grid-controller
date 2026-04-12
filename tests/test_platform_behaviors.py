@@ -10,6 +10,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.zero_grid_controller import ZGCData
 from custom_components.zero_grid_controller.array import ArrayConfig
+from custom_components.zero_grid_controller.binary_sensor import (
+    ZGCArraySwitchStateBinarySensor,
+    async_setup_entry as binary_sensor_async_setup_entry,
+)
 from custom_components.zero_grid_controller.button import (
     ZGCRecalibrateButton,
     ZGCResetPIDButton,
@@ -88,6 +92,18 @@ def _entry_with_subentries():
                     "setpoint_max": 100.0,
                 },
             },
+            {
+                "subentry_id": "array-switch",
+                "subentry_type": ARRAY_SUBENTRY_TYPE,
+                "title": "Switch Solar",
+                "data": {
+                    "array_name": "Switch Solar",
+                    "output_type": "switch",
+                    "setpoint_entity": "switch.solar_enable",
+                    "setpoint_min": 0.0,
+                    "setpoint_max": 1.0,
+                },
+            },
         ),
     )
 
@@ -99,7 +115,7 @@ def _make_coordinator(hass, entry):
         grid_filtered_w=120.1,
         pid_output_w=-20.6,
         status="active",
-        setpoints={"Solar": 42.345},
+        setpoints={"Solar": 42.345, "Switch Solar": 1.0},
         battery_setpoints={"Battery": -250.44},
     )
     return coordinator
@@ -112,7 +128,10 @@ async def test_sensor_platform_setup_adds_main_and_subentry_entities(hass):
     entry.runtime_data = ZGCData(
         coordinator=coordinator,
         device=SimpleNamespace(id="main"),
-        array_devices={"array-1": SimpleNamespace(id="array")},
+        array_devices={
+            "array-1": SimpleNamespace(id="array"),
+            "array-switch": SimpleNamespace(id="array-switch"),
+        },
         battery_devices={"battery-1": SimpleNamespace(id="battery")},
     )
 
@@ -130,6 +149,17 @@ async def test_sensor_platform_setup_adds_main_and_subentry_entities(hass):
     assert added[2][1] == "battery-1"
     assert isinstance(added[2][0][0], ZGCBatterySetpointSensor)
 
+    binary_added = []
+
+    def async_add_binary_entities(entities, config_subentry_id=None):
+        binary_added.append((entities, config_subentry_id))
+
+    await binary_sensor_async_setup_entry(hass, entry, async_add_binary_entities)
+
+    assert len(binary_added) == 1
+    assert binary_added[0][1] == "array-switch"
+    assert isinstance(binary_added[0][0][0], ZGCArraySwitchStateBinarySensor)
+
 
 def test_sensor_entities_expose_native_values_and_none_branch(hass):
     entry = MockConfigEntry(domain=DOMAIN, title="Zero Grid", data={}, options={})
@@ -139,7 +169,7 @@ def test_sensor_entities_expose_native_values_and_none_branch(hass):
         grid_filtered_w=120.11,
         pid_output_w=-20.66,
         status="active",
-        setpoints={"Solar": 42.345},
+        setpoints={"Solar": 42.345, "Switch Solar": 1.0},
         battery_setpoints={"Battery": -250.44},
     )
     device = SimpleNamespace(id="main")
@@ -148,16 +178,58 @@ def test_sensor_entities_expose_native_values_and_none_branch(hass):
     assert ZGCGridFilteredSensor(coordinator, entry, device).native_value == 120.1
     assert ZGCPIDOutputSensor(coordinator, entry, device).native_value == -20.7
     assert ZGCStatusSensor(coordinator, entry, device).native_value == "active"
-    assert ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value == 42.34
-    assert ZGCBatterySetpointSensor(coordinator, entry, device, "battery-1", "Battery").native_value == -250.4
+    assert (
+        ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value
+        == 42.34
+    )
+    assert (
+        ZGCBatterySetpointSensor(
+            coordinator, entry, device, "battery-1", "Battery"
+        ).native_value
+        == -250.4
+    )
+    assert (
+        ZGCArraySwitchStateBinarySensor(
+            coordinator, entry, device, "array-switch", "Switch Solar"
+        ).is_on
+        is True
+    )
 
     coordinator.data = None
-    assert ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value is None
-    assert ZGCBatterySetpointSensor(coordinator, entry, device, "battery-1", "Battery").native_value is None
+    assert (
+        ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value
+        is None
+    )
+    assert (
+        ZGCBatterySetpointSensor(
+            coordinator, entry, device, "battery-1", "Battery"
+        ).native_value
+        is None
+    )
+    assert (
+        ZGCArraySwitchStateBinarySensor(
+            coordinator, entry, device, "array-switch", "Switch Solar"
+        ).is_on
+        is None
+    )
 
     coordinator.data = ZGCResult(0.0, 0.0, 0.0, "idle", {}, {})
-    assert ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value is None
-    assert ZGCBatterySetpointSensor(coordinator, entry, device, "battery-1", "Battery").native_value is None
+    assert (
+        ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value
+        is None
+    )
+    assert (
+        ZGCBatterySetpointSensor(
+            coordinator, entry, device, "battery-1", "Battery"
+        ).native_value
+        is None
+    )
+    assert (
+        ZGCArraySwitchStateBinarySensor(
+            coordinator, entry, device, "array-switch", "Switch Solar"
+        ).is_on
+        is None
+    )
 
 
 async def test_button_entities_trigger_pid_reset_and_calibration(hass):

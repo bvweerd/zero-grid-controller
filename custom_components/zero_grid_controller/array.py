@@ -10,11 +10,15 @@ from typing import Any
 from .const import (
     CONF_ARRAY_NAME,
     CONF_CALIBRATION_CONFIDENCE,
+    CONF_DERIVED_MAX_POWER_W,
     CONF_OUTPUT_TYPE,
+    CONF_POWER_SENSOR_ENTITY,
     CONF_SETPOINT_ENTITY,
     CONF_SETPOINT_MAX,
     CONF_SETPOINT_MIN,
+    CONF_SETTLING_DOWN_S,
     CONF_SETTLING_TIME_S,
+    CONF_SETTLING_UP_S,
     CONF_SWITCH_DEBOUNCE_S,
     CONF_SWITCH_OFF_THRESHOLD_W,
     CONF_SWITCH_ON_THRESHOLD_W,
@@ -45,6 +49,10 @@ class ArrayConfig:
     setpoint_min: float
     setpoint_max: float
     settling_time_s: int
+    power_sensor_entity: str | None = None
+    derived_max_power_w: float | None = None
+    settling_down_s: int | None = None
+    settling_up_s: int | None = None
 
     # Switch-specific
     switch_on_threshold_w: float = DEFAULT_SWITCH_ON_THRESHOLD_W
@@ -91,6 +99,22 @@ def array_config_from_subentry(
         setpoint_min=float(data.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN)),
         setpoint_max=float(data.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX)),
         settling_time_s=int(data.get(CONF_SETTLING_TIME_S, DEFAULT_SETTLING_TIME_S)),
+        power_sensor_entity=data.get(CONF_POWER_SENSOR_ENTITY),
+        derived_max_power_w=(
+            float(data[CONF_DERIVED_MAX_POWER_W])
+            if data.get(CONF_DERIVED_MAX_POWER_W) is not None
+            else None
+        ),
+        settling_down_s=(
+            int(data[CONF_SETTLING_DOWN_S])
+            if data.get(CONF_SETTLING_DOWN_S) is not None
+            else None
+        ),
+        settling_up_s=(
+            int(data[CONF_SETTLING_UP_S])
+            if data.get(CONF_SETTLING_UP_S) is not None
+            else None
+        ),
         switch_on_threshold_w=float(
             data.get(CONF_SWITCH_ON_THRESHOLD_W, DEFAULT_SWITCH_ON_THRESHOLD_W)
         ),

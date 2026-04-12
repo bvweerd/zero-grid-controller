@@ -17,11 +17,16 @@ from .array import ArrayConfig, array_config_from_subentry
 from .battery import BatteryConfig, battery_config_from_subentry
 from .calibrator import ArrayCalibrator, CalibrationResult
 from .const import (
+    AGGRESSIVENESS_FACTORS,
+    AGGRESSIVENESS_KI_RATIO,
     ARRAY_SUBENTRY_TYPE,
     BATTERY_SUBENTRY_TYPE,
+    CALIBRATION_CONFIDENCE_MEASURED,
     CONF_AGGRESSIVENESS,
     CONF_CALIBRATION_CONFIDENCE,
     CONF_CONTROLLER_ENABLED,
+    CONF_DERIVED_MAX_POWER_W,
+    CONF_SETTLING_DOWN_S,
     CONF_DEADBAND_W,
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
@@ -30,7 +35,9 @@ from .const import (
     CONF_KI,
     CONF_KP,
     CONF_OUTPUT_MAX_W,
+    CONF_POWER_SENSOR_ENTITY,
     CONF_SETTLING_TIME_S,
+    CONF_SETTLING_UP_S,
     CONF_W_PER_UNIT,
     CONTROL_DT_MAX,
     CONTROL_DT_MIN,
@@ -162,7 +169,6 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             arrays=self.arrays,
             current_setpoints=self._current_setpoints,
             aggressiveness=self._aggressiveness,
-            read_grid=self._read_grid,
             write_setpoint=self._actuators.write_setpoint,
         )
         try:
@@ -211,6 +217,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 self._ewm_alpha * grid_raw + (1 - self._ewm_alpha) * self._filtered_w
             )
         filtered = self._filtered_w
+
+        # Suspend normal control while calibration owns the actuators.
+        if self._calibrator is not None:
+            self._pid.freeze_integrator()
+            return ZGCResult(
+                grid_raw_w=grid_raw,
+                grid_filtered_w=filtered,
+                pid_output_w=0.0,
+                status=STATUS_DISABLED,
+                setpoints=dict(self._current_setpoints),
+                battery_setpoints=dict(self._current_battery_setpoints),
+            )
 
         # 3. Enable entity check
         if not self._is_enabled():
@@ -420,6 +438,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self, results: list[CalibrationResult]
     ) -> None:
         """Persist w_per_unit and settling_time_s to each array's subentry."""
+        updated_any = False
         for result in results:
             if not result.success:
                 continue
@@ -439,24 +458,22 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                     **subentry_data,
                     CONF_W_PER_UNIT: result.w_per_unit,
                     CONF_SETTLING_TIME_S: result.settling_time_s,
-                    CONF_CALIBRATION_CONFIDENCE: "measured",
+                    CONF_SETTLING_DOWN_S: result.settling_down_s,
+                    CONF_SETTLING_UP_S: result.settling_up_s,
+                    CONF_CALIBRATION_CONFIDENCE: CALIBRATION_CONFIDENCE_MEASURED,
+                    CONF_DERIVED_MAX_POWER_W: result.derived_max_power_w,
                 }
                 self.hass.config_entries.async_update_subentry(
                     self._entry, subentry, data=new_data
                 )
-                # Update PID gains in main entry options
-                options = {
-                    **self._entry.options,
-                    CONF_KP: result.kp,
-                    CONF_KI: result.ki,
-                }
-                self.hass.config_entries.async_update_entry(
-                    self._entry, options=options
-                )
                 # Update in-memory too
                 array.w_per_unit = result.w_per_unit
                 array.settling_time_s = result.settling_time_s
-                self._pid.set_gains(result.kp, result.ki, self._pid.kd)
+                array.calibration_confidence = CALIBRATION_CONFIDENCE_MEASURED
+                array.derived_max_power_w = result.derived_max_power_w
+                array.settling_down_s = result.settling_down_s
+                array.settling_up_s = result.settling_up_s
+                updated_any = True
                 _LOGGER.info(
                     "Calibration persisted for %s: %.2f W/unit, kp=%.4f",
                     array.name,
@@ -464,3 +481,53 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                     result.kp,
                 )
                 break
+
+        if not updated_any:
+            return
+
+        pid_gains = self._compute_global_pid_gains()
+        if pid_gains is None:
+            return
+
+        kp, ki = pid_gains
+        options = {
+            **self._entry.options,
+            CONF_KP: kp,
+            CONF_KI: ki,
+        }
+        self.hass.config_entries.async_update_entry(self._entry, options=options)
+        self._pid.set_gains(kp, ki, self._pid.kd)
+
+    def _compute_global_pid_gains(self) -> tuple[float, float] | None:
+        """Compute global gains from measured numeric arrays."""
+        total_w_per_unit = sum(
+            array.w_per_unit
+            for array in self.arrays
+            if not array.is_switch
+            and array.calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
+        )
+        if total_w_per_unit <= 0:
+            return None
+
+        factor = AGGRESSIVENESS_FACTORS.get(self._aggressiveness, 1.0)
+        kp = round(factor / total_w_per_unit, 4)
+        ki = round(kp * AGGRESSIVENESS_KI_RATIO, 5)
+        return kp, ki
+
+    def _diagnostics_pid_basis(self) -> dict[str, object]:
+        """Return the measured numeric arrays used for current PID tuning."""
+        included_arrays = [
+            array.name
+            for array in self.arrays
+            if not array.is_switch
+            and array.calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
+        ]
+        total_w_per_unit = sum(
+            array.w_per_unit
+            for array in self.arrays
+            if array.name in included_arrays
+        )
+        return {
+            "total_w_per_unit": round(total_w_per_unit, 3),
+            "included_arrays": included_arrays,
+        }

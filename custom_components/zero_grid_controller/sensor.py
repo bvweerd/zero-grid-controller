@@ -16,7 +16,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ARRAY_SUBENTRY_TYPE, BATTERY_SUBENTRY_TYPE
+from .const import ARRAY_SUBENTRY_TYPE, BATTERY_SUBENTRY_TYPE, OUTPUT_TYPE_SWITCH
 from .coordinator import ZeroGridCoordinator, ZGCResult
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +49,8 @@ async def async_setup_entry(
             array_name = subentry.data.get("array_name", subentry.subentry_id)
             device = array_devices.get(subentry.subentry_id)
             if device is None:
+                continue
+            if subentry.data.get("output_type") == OUTPUT_TYPE_SWITCH:
                 continue
             async_add_entities(
                 [

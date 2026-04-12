@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,30 +16,47 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     return
 
 
-def _make_array(name="PV West", setpoint_max=100.0, setpoint_min=0.0) -> ArrayConfig:
+def _make_array(
+    name="PV West",
+    setpoint_max=100.0,
+    setpoint_min=0.0,
+    power_sensor_entity="sensor.pv_west_power",
+    calibration_confidence="estimated",
+) -> ArrayConfig:
     return ArrayConfig(
         name=name,
         output_type="percent",
         setpoint_entity="number.pv_west_limit",
         w_per_unit=23.0,
-        calibration_confidence="estimated",
+        calibration_confidence=calibration_confidence,
         setpoint_min=setpoint_min,
         setpoint_max=setpoint_max,
         settling_time_s=15,
+        power_sensor_entity=power_sensor_entity,
     )
 
 
-def _calibrator(arrays, grid_readings, aggressiveness="normal"):
-    """Build a calibrator with mock grid and write functions."""
+def _calibrator(arrays, sensor_readings, aggressiveness="normal"):
+    """Build a calibrator with mock power sensor readings and write function."""
+    states = {
+        array.power_sensor_entity: SimpleNamespace(state="0")
+        for array in arrays
+        if array.power_sensor_entity
+    }
     hass = MagicMock()
+    hass.states.get.side_effect = states.get
     current_setpoints = {a.name: a.setpoint_max for a in arrays}
-    grid_iter = iter(grid_readings)
+    read_iters = {
+        entity_id: iter(values) for entity_id, values in sensor_readings.items()
+    }
 
-    async def read_grid():
+    def advance(entity_id: str) -> None:
+        if entity_id not in read_iters:
+            return
         try:
-            return next(grid_iter)
+            states[entity_id].state = str(next(read_iters[entity_id]))
         except StopIteration:
-            return grid_readings[-1]
+            pass
 
     write_setpoint = AsyncMock()
     return (
@@ -47,117 +65,123 @@ def _calibrator(arrays, grid_readings, aggressiveness="normal"):
             arrays=arrays,
             current_setpoints=current_setpoints,
             aggressiveness=aggressiveness,
-            read_grid=read_grid,
             write_setpoint=write_setpoint,
         ),
         write_setpoint,
+        advance,
     )
 
 
-async def test_calibration_success():
-    """Successful calibration returns correct w_per_unit."""
-    array = _make_array()
-    # Baseline: 10 readings at 50 W, then settled response at 280 W (Δ = 230 W)
-    # step = 10 % of 100 = 10 units → w_per_unit = 230 / 10 = 23 W/%
-    baseline = [50.0] * 10
-    # During settling: grid rises and stabilises at 280 W
-    response = [50.0, 80.0, 150.0, 210.0, 270.0, 278.0, 280.0, 280.0, 280.0]
-    grid_readings = baseline + response
+def _stable_midpoint_readings() -> list[float]:
+    return [300.0, 300.0, 300.0, 200.0, 200.0, 200.0, 300.0, 300.0, 300.0]
 
-    calibrator, write_sp = _calibrator([array], grid_readings)
-    with patch("asyncio.sleep", new=AsyncMock()):
+
+async def test_calibration_success():
+    """Successful calibration returns correct midpoint slope and derived max power."""
+    array = _make_array()
+    readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    calibrator, _, advance = _calibrator([array], readings)
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
         results = await calibrator.run()
 
-    assert len(results) == 1
     result = results[0]
     assert result.success is True
-    assert result.w_per_unit == pytest.approx(23.0, abs=2.0)
+    assert result.w_per_unit == pytest.approx(10.0, abs=0.1)
+    assert result.derived_max_power_w == pytest.approx(1000.0, abs=0.1)
     assert result.settling_time_s > 0
-    assert result.kp > 0
-    assert result.ki > 0
+    assert result.kp == pytest.approx(0.1, rel=0.01)
+    assert result.ki == pytest.approx(0.005, rel=0.01)
 
 
-async def test_calibration_grid_unavailable_fails():
-    """Calibration fails when grid sensor returns None."""
+async def test_calibration_power_sensor_unavailable_fails():
+    """Calibration fails when the power sensor cannot be read."""
     array = _make_array()
-    calibrator, _ = _calibrator([array], [None] * 20)
+    calibrator, _, _ = _calibrator([array], {"sensor.pv_west_power": []})
     with patch("asyncio.sleep", new=AsyncMock()):
         results = await calibrator.run()
     assert results[0].success is False
 
 
-async def test_calibration_grid_too_far_from_zero_fails():
-    """Calibration aborts when |grid| > CALIB_MAX_GRID_W."""
-    array = _make_array()
-    # Grid far from zero during baseline
-    calibrator, _ = _calibrator([array], [5000.0] * 20)
-    with patch("asyncio.sleep", new=AsyncMock()):
-        results = await calibrator.run()
-    assert results[0].success is False
-
-
-async def test_calibration_setpoint_at_min_fails():
-    """Calibration fails when setpoint is already at minimum."""
-    array = _make_array(setpoint_min=0.0, setpoint_max=100.0)
-    calibrator, _ = _calibrator([array], [50.0] * 20)
-    # Force setpoint to min so step is impossible
-    calibrator._current_setpoints["PV West"] = 0.0
+async def test_calibration_requires_power_sensor():
+    """Numeric arrays without a power sensor are not eligible."""
+    array = _make_array(power_sensor_entity=None)
+    calibrator, _, _ = _calibrator([array], {})
     with patch("asyncio.sleep", new=AsyncMock()):
         results = await calibrator.run()
     assert results[0].success is False
 
 
 async def test_calibration_timeout_fails():
-    """Calibration fails when inverter never settles."""
+    """Calibration fails when power never settles."""
     array = _make_array()
-    # Response never reaches stable state — grid stays at baseline
-    baseline = [50.0] * 10
-    no_response = [50.0] * 200  # no change after step
-    calibrator, _ = _calibrator([array], baseline + no_response)
-    with patch("asyncio.sleep", new=AsyncMock()):
+    readings = {"sensor.pv_west_power": [300.0, 250.0, 310.0, 260.0] * 50}
+    calibrator, _, advance = _calibrator([array], readings)
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
         results = await calibrator.run()
     assert results[0].success is False
 
 
 async def test_calibration_tiny_response_fails():
-    """Calibration fails when w_per_unit < CALIB_MIN_W_PER_UNIT."""
+    """Calibration fails when the 30%→20% delta is too small."""
     array = _make_array()
-    # Step = 10 units, delta_grid = 0.1 W → w_per_unit = 0.01 < 0.5
-    baseline = [50.0] * 10
-    response = [50.1, 50.1, 50.1, 50.1, 50.1, 50.1]
-    calibrator, _ = _calibrator([array], baseline + response)
-    with patch("asyncio.sleep", new=AsyncMock()):
+    readings = {
+        "sensor.pv_west_power": [
+            100.0,
+            100.0,
+            100.0,
+            99.9,
+            99.9,
+            99.9,
+            100.0,
+            100.0,
+            100.0,
+        ]
+    }
+    calibrator, _, advance = _calibrator([array], readings)
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
         results = await calibrator.run()
     assert results[0].success is False
 
 
 async def test_calibration_restores_setpoint_on_success():
-    """Calibration restores original setpoint after completing."""
+    """Calibration restores the original setpoint after midpoint test."""
     array = _make_array()
-    original_sp = array.setpoint_max
-    baseline = [50.0] * 10
-    response = [50.0, 100.0, 200.0, 270.0, 278.0, 280.0, 280.0, 280.0, 280.0]
-    calibrator, write_sp = _calibrator([array], baseline + response)
-    with patch("asyncio.sleep", new=AsyncMock()):
+    readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    calibrator, write_sp, advance = _calibrator([array], readings)
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
         await calibrator.run()
-    # Last write should restore original setpoint
-    last_write_value = write_sp.call_args_list[-1].args[1]
-    assert last_write_value == pytest.approx(original_sp)
+
+    assert write_sp.call_args_list[-1].args[1] == pytest.approx(array.setpoint_max)
 
 
 async def test_calibration_abort_stops_early():
     """abort() prevents calibrating further arrays."""
     arrays = [_make_array("Array1"), _make_array("Array2")]
-    baseline = [50.0] * 10
-    response = [50.0, 100.0, 200.0, 278.0, 280.0, 280.0, 280.0, 280.0, 280.0]
-    calibrator, _ = _calibrator(arrays, baseline + response + baseline + response)
+    readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    calibrator, _, _ = _calibrator(arrays, readings)
 
-    async def sleep_and_abort(secs):
+    async def sleep_and_abort(_secs):
         calibrator.abort()
 
     with patch("asyncio.sleep", new=sleep_and_abort):
         results = await calibrator.run()
-    # Only first array was calibrated
+
     assert len(results) == 1
 
 
@@ -175,37 +199,88 @@ async def test_calibration_switch_arrays_skipped():
         setpoint_max=1.0,
         settling_time_s=30,
     )
-    calibrator, _ = _calibrator([switch_array], [50.0] * 20)
+    calibrator, _, _ = _calibrator([switch_array], {})
     with patch("asyncio.sleep", new=AsyncMock()):
         results = await calibrator.run()
-    assert results == []  # no numeric arrays → no results
+    assert results == []
 
 
-async def test_calibration_aggressiveness_normal():
-    """Normal aggressiveness gives reasonable gains."""
-    array = _make_array()
-    baseline = [50.0] * 10
-    response = [50.0, 100.0, 200.0, 278.0, 280.0, 280.0, 280.0, 280.0, 280.0]
-    calibrator, _ = _calibrator([array], baseline + response, aggressiveness="normal")
-    with patch("asyncio.sleep", new=AsyncMock()):
+async def test_calibration_aggressiveness_uses_total_measured_plant_gain():
+    """Global gains use all measured arrays instead of the latest array only."""
+    arrays = [
+        _make_array("Array1", power_sensor_entity="sensor.array1_power"),
+        _make_array(
+            "Array2",
+            power_sensor_entity="sensor.array2_power",
+            calibration_confidence="measured",
+        ),
+    ]
+    arrays[1].w_per_unit = 15.0
+    readings = {"sensor.array1_power": _stable_midpoint_readings()}
+    calibrator, _, advance = _calibrator(arrays, readings)
+
+    async def fake_sleep(_secs):
+        advance("sensor.array1_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
         results = await calibrator.run()
+
     assert results[0].success
-    # kp ≈ 1.0 / 23.0 ≈ 0.043
-    assert results[0].kp == pytest.approx(1.0 / results[0].w_per_unit, rel=0.01)
+    assert results[0].kp == pytest.approx(1.0 / 25.0, rel=0.01)
 
 
 async def test_calibration_aggressiveness_fast_higher_kp():
     """Fast aggressiveness gives higher Kp than normal."""
-    array = _make_array()
-    baseline = [50.0] * 10
-    response = [50.0, 100.0, 200.0, 278.0, 280.0, 280.0, 280.0, 280.0, 280.0]
-    calibrator_normal, _ = _calibrator(
-        [array], baseline + response, aggressiveness="normal"
+    normal_array = _make_array()
+    fast_array = _make_array()
+    normal_readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    fast_readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    calibrator_normal, _, advance_normal = _calibrator(
+        [normal_array], normal_readings, aggressiveness="normal"
     )
-    calibrator_fast, _ = _calibrator(
-        [array], baseline + response, aggressiveness="fast"
+    calibrator_fast, _, advance_fast = _calibrator(
+        [fast_array], fast_readings, aggressiveness="fast"
     )
-    with patch("asyncio.sleep", new=AsyncMock()):
+
+    async def sleep_normal(_secs):
+        advance_normal("sensor.pv_west_power")
+
+    async def sleep_fast(_secs):
+        advance_fast("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=sleep_normal):
         result_normal = (await calibrator_normal.run())[0]
+    with patch("asyncio.sleep", new=sleep_fast):
         result_fast = (await calibrator_fast.run())[0]
+
     assert result_fast.kp > result_normal.kp
+
+
+async def test_calibration_uses_slower_return_direction_for_settling_time():
+    """The stored settling time should reflect the slowest direction."""
+    array = _make_array()
+    readings = {
+        "sensor.pv_west_power": [
+            300.0,
+            300.0,
+            300.0,
+            200.0,
+            200.0,
+            200.0,
+            240.0,
+            270.0,
+            300.0,
+            300.0,
+            300.0,
+        ]
+    }
+    calibrator, _, advance = _calibrator([array], readings)
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
+        result = (await calibrator.run())[0]
+
+    assert result.success is True
+    assert result.settling_time_s == pytest.approx(25)

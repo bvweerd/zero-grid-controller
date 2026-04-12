@@ -29,6 +29,7 @@ async def async_get_config_entry_diagnostics(
             "ki": coordinator._pid.ki,
             "kd": coordinator._pid.kd,
             "integral": round(coordinator._pid.integral, 3),
+            "basis": coordinator._diagnostics_pid_basis(),
         },
         "arrays": [
             {
@@ -38,6 +39,10 @@ async def async_get_config_entry_diagnostics(
                 "setpoint_max": a.setpoint_max,
                 "w_per_unit": a.w_per_unit,
                 "settling_time_s": a.settling_time_s,
+                "settling_down_s": a.settling_down_s,
+                "settling_up_s": a.settling_up_s,
+                "power_sensor_entity": a.power_sensor_entity,
+                "derived_max_power_w": a.derived_max_power_w,
                 "calibration_confidence": a.calibration_confidence,
             }
             for a in coordinator.arrays

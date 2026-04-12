@@ -13,6 +13,7 @@ from custom_components.zero_grid_controller.calibrator import CalibrationResult
 from custom_components.zero_grid_controller.const import (
     ARRAY_SUBENTRY_TYPE,
     BATTERY_SUBENTRY_TYPE,
+    CALIBRATION_CONFIDENCE_MEASURED,
     DOMAIN,
     STATUS_ACTIVE,
     STATUS_DEADBAND,
@@ -180,6 +181,7 @@ async def test_start_calibration_runs_and_persists_results(hass):
         settling_time_s=8,
         kp=0.4,
         ki=0.02,
+        derived_max_power_w=1200.0,
         message="ok",
     )
 
@@ -210,6 +212,32 @@ async def test_abort_calibration_calls_abort(hass):
     coordinator.abort_calibration()
 
     coordinator._calibrator.abort.assert_called_once()
+
+
+async def test_update_data_does_not_write_while_calibration_running(hass):
+    entry = _make_entry(deadband_w=5.0, ewm_alpha=1.0, controller_enabled=True)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._calibrator = MagicMock()
+    coordinator._current_setpoints = {"Solar": 30.0}
+
+    hass.states.async_set("sensor.grid_import", "1000")
+    hass.states.async_set("sensor.grid_export", "0")
+
+    with (
+        patch.object(
+            coordinator._actuators, "write_setpoint", new=AsyncMock()
+        ) as mock_write_setpoint,
+        patch.object(
+            coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+        ) as mock_write_numeric,
+    ):
+        result = await coordinator._async_update_data()
+
+    assert result.status == STATUS_DISABLED
+    assert result.setpoints["Solar"] == pytest.approx(30.0)
+    mock_write_setpoint.assert_not_awaited()
+    mock_write_numeric.assert_not_awaited()
 
 
 def test_read_sensor_safe_returns_none_for_invalid_state(hass):
@@ -438,6 +466,7 @@ async def test_persist_calibration_results_updates_matching_subentry(hass):
                 "array_name": "Solar",
                 "output_type": "percent",
                 "setpoint_entity": "number.solar_limit",
+                "power_sensor_entity": "sensor.solar_power",
                 "setpoint_min": 0.0,
                 "setpoint_max": 100.0,
                 "w_per_unit": 10.0,
@@ -461,6 +490,7 @@ async def test_persist_calibration_results_updates_matching_subentry(hass):
         settling_time_s=9,
         kp=0.7,
         ki=0.03,
+        derived_max_power_w=1500.0,
         message="ok",
     )
 
@@ -476,7 +506,9 @@ async def test_persist_calibration_results_updates_matching_subentry(hass):
     mock_update_entry.assert_called_once()
     assert coordinator.arrays[0].w_per_unit == 15.0
     assert coordinator.arrays[0].settling_time_s == 9
-    assert coordinator._pid.kp == pytest.approx(0.7)
+    assert coordinator.arrays[0].calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
+    assert coordinator.arrays[0].derived_max_power_w == pytest.approx(1500.0)
+    assert coordinator._pid.kp == pytest.approx(1.0 / 15.0, rel=0.01)
 
 
 async def test_persist_calibration_results_skips_unsuccessful_or_unknown_arrays(hass):
@@ -489,8 +521,8 @@ async def test_persist_calibration_results_skips_unsuccessful_or_unknown_arrays(
     ) as mock_update_subentry:
         await coordinator._persist_calibration_results(
             [
-                CalibrationResult("Missing", True, 10.0, 5, 0.5, 0.01, "ok"),
-                CalibrationResult("Missing", False, 10.0, 5, 0.5, 0.01, "failed"),
+                CalibrationResult("Missing", True, 10.0, 5, 0.5, 0.01, None, "ok"),
+                CalibrationResult("Missing", False, 10.0, 5, 0.5, 0.01, None, "failed"),
             ]
         )
 
@@ -530,6 +562,7 @@ async def test_persist_calibration_results_skips_non_array_subentries(hass):
             setpoint_min=0.0,
             setpoint_max=100.0,
             settling_time_s=15,
+            power_sensor_entity="sensor.solar_power",
         )
     ]
 
@@ -537,7 +570,7 @@ async def test_persist_calibration_results_skips_non_array_subentries(hass):
         hass.config_entries, "async_update_subentry"
     ) as mock_update_subentry:
         await coordinator._persist_calibration_results(
-            [CalibrationResult("Solar", True, 15.0, 9, 0.7, 0.03, "ok")]
+            [CalibrationResult("Solar", True, 15.0, 9, 0.7, 0.03, 1500.0, "ok")]
         )
 
     mock_update_subentry.assert_not_called()

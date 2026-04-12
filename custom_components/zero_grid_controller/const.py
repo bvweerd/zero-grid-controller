@@ -29,6 +29,10 @@ CONF_SETPOINT_MAX = "setpoint_max"
 CONF_SETTLING_TIME_S = "settling_time_s"
 CONF_W_PER_UNIT = "w_per_unit"
 CONF_CALIBRATION_CONFIDENCE = "calibration_confidence"
+CONF_POWER_SENSOR_ENTITY = "power_sensor_entity"
+CONF_DERIVED_MAX_POWER_W = "derived_max_power_w"
+CONF_SETTLING_DOWN_S = "settling_down_s"
+CONF_SETTLING_UP_S = "settling_up_s"
 
 # Switch array config keys
 CONF_SWITCH_ON_THRESHOLD_W = "switch_on_threshold_w"
@@ -73,6 +77,7 @@ CALIB_INTER_ARRAY_SLEEP_S = 15  # Pause between arrays
 CALIB_SETTLING_MIN_S = 3
 CALIB_SETTLING_MAX_S = 60
 CALIBRATION_CONFIDENCE_ESTIMATED = "estimated"
+CALIBRATION_CONFIDENCE_MEASURED = "measured"
 
 # Control loop timing
 CONTROL_DT_MIN = 0.1
@@ -109,6 +114,7 @@ DEADBAND_STEP_W = 1.0
 
 # Platforms
 PLATFORMS = [
+    Platform.BINARY_SENSOR,
     Platform.SENSOR,
     Platform.NUMBER,
     Platform.BUTTON,

@@ -39,6 +39,10 @@ async def test_diagnostics_returns_runtime_snapshot(hass):
             setpoint_min=0.0,
             setpoint_max=100.0,
             settling_time_s=15,
+            power_sensor_entity="sensor.solar_power",
+            derived_max_power_w=1250.0,
+            settling_down_s=10,
+            settling_up_s=15,
         )
     ]
     coordinator.batteries = [
@@ -71,5 +75,11 @@ async def test_diagnostics_returns_runtime_snapshot(hass):
     assert diagnostics["setpoints"]["Solar"] == 82.0
     assert diagnostics["battery_setpoints"]["Battery"] == -400.0
     assert diagnostics["pid"]["integral"] == 1.234
+    assert diagnostics["pid"]["basis"]["total_w_per_unit"] == 12.5
+    assert diagnostics["pid"]["basis"]["included_arrays"] == ["Solar"]
     assert diagnostics["arrays"][0]["calibration_confidence"] == "measured"
+    assert diagnostics["arrays"][0]["settling_down_s"] == 10
+    assert diagnostics["arrays"][0]["settling_up_s"] == 15
+    assert diagnostics["arrays"][0]["power_sensor_entity"] == "sensor.solar_power"
+    assert diagnostics["arrays"][0]["derived_max_power_w"] == 1250.0
     assert diagnostics["batteries"][0]["max_discharge_w"] == 5000.0

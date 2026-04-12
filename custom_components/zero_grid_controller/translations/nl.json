@@ -55,10 +55,12 @@
           "description": "Stel de entiteit en het bereik in voor de vermogenslimiet.",
           "data": {
             "setpoint_entity": "Entiteit voor de vermogenslimiet",
+            "power_sensor_entity": "Array vermogensensor",
             "setpoint_min": "Minimale setpointwaarde",
             "setpoint_max": "Maximale setpointwaarde"
           },
           "data_description": {
+            "power_sensor_entity": "Vermogensensor per array voor midpoint-kalibratie van 30% naar 20%.",
             "setpoint_min": "De laagste waarde die de controller ooit schrijft (bijv. 0% of 0 W).",
             "setpoint_max": "De hoogste waarde — volledig vermogen. Kalibratie gebruikt dit bereik om de omvormerversterking te meten."
           }
@@ -170,6 +172,11 @@
         "name": "Setpoint"
       },
       "battery_setpoint": {
+        "name": "Setpoint"
+      }
+    },
+    "binary_sensor": {
+      "array_switch_state": {
         "name": "Setpoint"
       }
     },

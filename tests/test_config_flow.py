@@ -19,6 +19,7 @@ from custom_components.zero_grid_controller.const import (
     CONF_GRID_IMPORT_SENSORS,
     CONF_NAME,
     CONF_OUTPUT_TYPE,
+    CONF_POWER_SENSOR_ENTITY,
     CONF_SETPOINT_ENTITY,
     CONF_SETPOINT_MAX,
     CONF_SETPOINT_MIN,
@@ -188,12 +189,14 @@ async def test_array_subentry_add_numeric_flow(hass):
         result["flow_id"],
         {
             CONF_SETPOINT_ENTITY: "number.garage_limit",
+            CONF_POWER_SENSOR_ENTITY: "sensor.garage_power",
             CONF_SETPOINT_MIN: 5.0,
             CONF_SETPOINT_MAX: 95.0,
         },
     )
     assert result["type"] == "create_entry"
     assert result["title"] == "Garage PV"
+    assert result["data"][CONF_POWER_SENSOR_ENTITY] == "sensor.garage_power"
     assert result["data"]["w_per_unit"] == 10.0
     assert result["data"]["calibration_confidence"] == "estimated"
 
@@ -251,6 +254,7 @@ async def test_array_subentry_numeric_validation(hass):
         result["flow_id"],
         {
             CONF_SETPOINT_ENTITY: "number.solar_limit",
+            CONF_POWER_SENSOR_ENTITY: "sensor.solar_power",
             CONF_SETPOINT_MIN: 80.0,
             CONF_SETPOINT_MAX: 20.0,
         },

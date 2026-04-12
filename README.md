@@ -113,9 +113,11 @@ Changes take effect immediately without restart.
 
 ## Calibration
 
-Calibration measures the actual inverter response (W per setpoint unit) and settling time. The controller then auto-computes PID gains from the measured gain and the selected aggressiveness.
+Calibration measures the actual inverter response with a per-array power sensor and then auto-computes global PID gains from the combined calibrated numeric arrays.
 
-Run calibration **on a sunny day** when the inverter is producing at or near maximum:
+For numeric arrays, add an **Array power sensor** in the array subentry. The calibrator uses that sensor directly and no longer infers array response from net grid power alone.
+
+Run calibration when the inverter is producing stably enough that a `30% → 20% → 30%` step is visible on the array power sensor:
 
 1. Go to the controller device.
 2. Press the **Recalibrate all arrays** button.
@@ -126,16 +128,19 @@ service: zero_grid_controller.recalibrate
 data: {}
 ```
 
-Calibration runs one array at a time. For each array it:
-1. Measures baseline grid power over 10 samples.
-2. Steps the setpoint down by ~10% of the range.
-3. Waits for the grid signal to stabilise (max 90 s).
-4. Restores the original setpoint.
-5. Computes `w_per_unit` and settling time, then derives Kp and Ki.
+Calibration runs one array at a time. For each numeric array it:
+1. Moves the array to a midpoint workpoint at `30%`.
+2. Waits for the array power sensor to stabilise.
+3. Steps down to `20%` and measures the downwards response.
+4. Steps back up to `30%` and measures the upwards response.
+5. Restores the original setpoint.
+6. Computes `w_per_unit`, a derived maximum power estimate, and a conservative settling time based on the slowest direction.
 
 Switch arrays are skipped — they have no intermediate setpoint to measure.
 
-Calibration confidence is shown in the diagnostics analyzer. Arrays showing `estimated` use default W/unit values and benefit most from running calibration.
+Global PID gains are recomputed once per calibration run from the total calibrated numeric plant. A single array calibration result no longer overwrites the global PID on its own.
+
+Calibration confidence is shown in the diagnostics analyzer. Arrays showing `estimated` still use fallback W/unit values and benefit most from running calibration.
 
 ---
 
@@ -158,7 +163,8 @@ Calibration confidence is shown in the diagnostics analyzer. Arrays showing `est
 
 | Entity | Description |
 |--------|-------------|
-| `sensor.*_setpoint` | Current setpoint value |
+| `sensor.*_setpoint` | Current setpoint value for numeric arrays |
+| `binary_sensor.*_setpoint` | Current commanded on/off state for switch arrays |
 
 ### Per battery (sub-device)
 
@@ -184,9 +190,10 @@ Download a diagnostics snapshot via **Settings → Devices & Services → Zero G
 Open it in the [online analyzer](https://bvweerd.github.io/Zero-Grid-Controller/) to inspect:
 
 - Current control status and grid measurements
-- Per-array setpoints, W/unit and calibration confidence
+- Per-array setpoints, power sensor, W/unit, derived max power, and calibration confidence
+- Downward and upward settling times from bidirectional midpoint calibration
 - Battery setpoints and capacity
-- PID gains and integrator state
+- PID gains, integrator state, and the calibrated numeric arrays currently used as the PID basis
 - Actionable recommendations
 
 ---
@@ -218,7 +225,7 @@ Only when all numeric PV arrays are already at their maximum setpoint and the gr
 ## Architecture notes (for developers)
 
 - **`pid.py`** — Discrete PID with conditional anti-windup and per-cycle integrator freeze.
-- **`calibrator.py`** — Async step-response calibration; measures W/unit and settling time per array.
+- **`calibrator.py`** — Async midpoint calibration with direct array power sensors; measures W/unit, derived max power, and directional settling times.
 - **`coordinator.py`** — `DataUpdateCoordinator` subclass; runs every 5 s. Owns the 8-step control loop.
 - **`array.py`** — `ArrayConfig` dataclass; one per PV array subentry.
 - **`battery.py`** — `BatteryConfig` dataclass; one per battery subentry.

@@ -120,6 +120,8 @@
       ['Ki', pid.ki ?? '—'],
       ['Kd', pid.kd ?? '—'],
       ['Integral', pid.integral ?? '—'],
+      ['PID basis gain', pid.basis && pid.basis.total_w_per_unit != null ? `${pid.basis.total_w_per_unit} W/unit` : '—'],
+      ['PID basis arrays', pid.basis && Array.isArray(pid.basis.included_arrays) && pid.basis.included_arrays.length ? pid.basis.included_arrays.join(', ') : '—'],
       ['Deadband', config.deadband_w != null ? `${config.deadband_w} W` : '—'],
       ['EWM alpha', config.ewm_alpha ?? '—'],
       ['Aggressiveness', config.aggressiveness ?? '—'],
@@ -141,8 +143,11 @@
         <td>${a.output_type}</td>
         <td>${sp == null ? '—' : sp}</td>
         <td>${a.setpoint_min} – ${a.setpoint_max}</td>
+        <td>${a.power_sensor_entity || '—'}</td>
         <td>${a.w_per_unit}</td>
-        <td>${a.settling_time_s} s</td>
+        <td>${a.derived_max_power_w == null ? '—' : `${a.derived_max_power_w} W`}</td>
+        <td>${a.settling_down_s == null ? '—' : `${a.settling_down_s} s`}</td>
+        <td>${a.settling_up_s == null ? '—' : `${a.settling_up_s} s`}</td>
         <td><span class="badge ${createBadgeClass(a.calibration_confidence === 'measured' ? 'ok' : 'warn')}">${a.calibration_confidence}</span></td>`;
       arraysTable.appendChild(row);
     });

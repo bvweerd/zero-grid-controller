@@ -16,7 +16,8 @@
       "array_calibration": { "default": "mdi:check-decagram-outline" }
     },
     "binary_sensor": {
-      "battery_clipping": { "default": "mdi:battery-alert" }
+      "battery_clipping": { "default": "mdi:battery-alert" },
+      "array_switch_state": { "default": "mdi:solar-power-variant" }
     },
     "number": {
       "kp": { "default": "mdi:alpha-p-box-outline" },
