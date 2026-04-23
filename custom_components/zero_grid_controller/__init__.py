@@ -146,10 +146,22 @@ async def async_remove_config_entry_device(
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload integration when config/options change."""
-    if entry.runtime_data is not None:
-        entry.runtime_data.coordinator.reload_config()
+    if entry.runtime_data is None:
+        await hass.config_entries.async_reload(entry.entry_id)
         return
-    await hass.config_entries.async_reload(entry.entry_id)
+
+    # When subentries are added or removed the device and entity registry need
+    # to be updated, which requires a full platform reload.  For plain options
+    # changes a lightweight coordinator reload is sufficient.
+    current_ids = frozenset(entry.subentries)
+    known_ids = frozenset(entry.runtime_data.array_devices) | frozenset(
+        entry.runtime_data.battery_devices
+    )
+    if current_ids != known_ids:
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+
+    entry.runtime_data.coordinator.reload_config()
 
 
 def _register_services(hass: HomeAssistant) -> None:

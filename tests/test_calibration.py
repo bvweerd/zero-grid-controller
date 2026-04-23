@@ -93,8 +93,8 @@ async def test_calibration_success():
     assert result.w_per_unit == pytest.approx(10.0, abs=0.1)
     assert result.derived_max_power_w == pytest.approx(1000.0, abs=0.1)
     assert result.settling_time_s > 0
-    assert result.kp == pytest.approx(0.1, rel=0.01)
-    assert result.ki == pytest.approx(0.005, rel=0.01)
+    assert result.kp == pytest.approx(1.0, rel=0.01)
+    assert result.ki == pytest.approx(0.01, rel=0.01)
 
 
 async def test_calibration_power_sensor_unavailable_fails():
@@ -226,7 +226,7 @@ async def test_calibration_aggressiveness_uses_total_measured_plant_gain():
         results = await calibrator.run()
 
     assert results[0].success
-    assert results[0].kp == pytest.approx(1.0 / 25.0, rel=0.01)
+    assert results[0].kp == pytest.approx(1.0, rel=0.01)
 
 
 async def test_calibration_aggressiveness_fast_higher_kp():

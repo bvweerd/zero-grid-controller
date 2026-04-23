@@ -178,18 +178,43 @@ async def test_recalibrate_service_starts_task_for_matching_entry(hass):
 async def test_update_listener_reloads_or_refreshes_runtime(hass):
     entry = _entry_with_subentries()
     entry.add_to_hass(hass)
-    runtime_data = SimpleNamespace(coordinator=MagicMock())
-    entry.runtime_data = runtime_data
 
+    # Subentry IDs match known devices → lightweight coordinator reload.
+    runtime_data = SimpleNamespace(
+        coordinator=MagicMock(),
+        array_devices={"array-1": object()},
+        battery_devices={"battery-1": object()},
+    )
+    entry.runtime_data = runtime_data
     await _async_update_listener(hass, entry)
     runtime_data.coordinator.reload_config.assert_called_once()
 
+    # No runtime_data → full entry reload.
     entry.runtime_data = None
     with patch.object(
         hass.config_entries, "async_reload", new=AsyncMock()
     ) as mock_reload:
         await _async_update_listener(hass, entry)
     mock_reload.assert_awaited_once_with(entry.entry_id)
+
+
+async def test_update_listener_full_reload_on_subentry_change(hass):
+    entry = _entry_with_subentries()
+    entry.add_to_hass(hass)
+
+    # Known devices don't match current subentries → full reload required.
+    runtime_data = SimpleNamespace(
+        coordinator=MagicMock(),
+        array_devices={},  # missing array-1 and battery-1
+        battery_devices={},
+    )
+    entry.runtime_data = runtime_data
+    with patch.object(
+        hass.config_entries, "async_reload", new=AsyncMock()
+    ) as mock_reload:
+        await _async_update_listener(hass, entry)
+    mock_reload.assert_awaited_once_with(entry.entry_id)
+    runtime_data.coordinator.reload_config.assert_not_called()
 
 
 async def test_remove_config_entry_device_rejects_active_devices(hass):

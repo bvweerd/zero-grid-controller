@@ -46,8 +46,9 @@ class ActuatorManager:
                 )
                 return
             service = "turn_on" if value > 0 else "turn_off"
+            entity_domain = array.setpoint_entity.split(".", 1)[0]
             await self._hass.services.async_call(
-                "switch",
+                entity_domain,
                 service,
                 {ATTR_ENTITY_ID: array.setpoint_entity},
                 blocking=True,

@@ -1,0 +1,285 @@
+{
+  "home_assistant": {
+    "installation_type": "Home Assistant Container",
+    "version": "2026.4.1",
+    "dev": false,
+    "hassio": false,
+    "virtualenv": false,
+    "python_version": "3.14.2",
+    "docker": true,
+    "arch": "x86_64",
+    "timezone": "Europe/Amsterdam",
+    "os_name": "Linux",
+    "os_version": "6.8.0-107-generic",
+    "container_arch": "amd64",
+    "run_as_root": true
+  },
+  "custom_components": {
+    "battery_controller": {
+      "documentation": "https://www.github.com/bvweerd/battery_controller",
+      "version": "2.0.0",
+      "requirements": []
+    },
+    "simple_pid_controller": {
+      "documentation": "https://www.github.com/bvweerd/simple_pid_controller",
+      "version": "1.4.2",
+      "requirements": [
+        "simple-pid==2.0.1"
+      ]
+    },
+    "alarmo": {
+      "documentation": "https://github.com/nielsfaber/alarmo",
+      "version": "1.10.16",
+      "requirements": []
+    },
+    "tuya_local": {
+      "documentation": "https://github.com/make-all/tuya-local",
+      "version": "2026.4.0",
+      "requirements": [
+        "tinytuya==1.17.6",
+        "tuya-device-sharing-sdk~=0.2.4"
+      ]
+    },
+    "browser_mod": {
+      "documentation": "https://github.com/thomasloven/hass-browser_mod/blob/master/README.md",
+      "version": "2.10.2",
+      "requirements": []
+    },
+    "heating_curve_optimizer": {
+      "documentation": "https://www.github.com/bvweerd/heating_curve_optimizer",
+      "version": "1.0.2",
+      "requirements": [
+        "aiohttp"
+      ]
+    },
+    "watchman": {
+      "documentation": "https://github.com/dummylabs/thewatchman",
+      "version": "0.8.4",
+      "requirements": [
+        "prettytable==3.12.0"
+      ]
+    },
+    "hacs": {
+      "documentation": "https://hacs.xyz/docs/use/",
+      "version": "2.0.5",
+      "requirements": [
+        "aiogithubapi>=22.10.1"
+      ]
+    },
+    "mbapi2020": {
+      "documentation": "https://github.com/ReneNulschDE/mbapi2020",
+      "version": "v0.35.0",
+      "requirements": [
+        "protobuf>=3.19.5"
+      ]
+    },
+    "moonraker": {
+      "documentation": "https://moonraker-home-assistant.readthedocs.io/en/latest/",
+      "version": "1.13.3",
+      "requirements": [
+        "moonraker-api==2.0.6"
+      ]
+    },
+    "afvalwijzer": {
+      "documentation": "https://github.com/xirixiz/homeassistant-afvalwijzer/blob/main/README.md",
+      "version": "2026.1013",
+      "requirements": [
+        "requests",
+        "urllib3"
+      ]
+    },
+    "spoolman": {
+      "documentation": "https://github.com/Disane87/spoolman-homeassistant",
+      "version": "0.0.0",
+      "requirements": []
+    },
+    "zonneplan_one": {
+      "documentation": "https://github.com/fsaris/home-assistant-zonneplan-one",
+      "version": "2026.2.1",
+      "requirements": []
+    },
+    "frigate": {
+      "documentation": "https://github.com/blakeblackshear/frigate",
+      "version": "5.15.2",
+      "requirements": [
+        "hass-web-proxy-lib==0.0.7",
+        "titlecase==2.4.1"
+      ]
+    },
+    "zero_grid_controller": {
+      "documentation": "https://github.com/bvweerd/Zero-Grid-Controller",
+      "version": "0.1.0",
+      "requirements": []
+    },
+    "dynamic_energy_contract_calculator": {
+      "documentation": "https://github.com/bvweerd/dynamic_energy_calculator",
+      "version": "1.3.6",
+      "requirements": []
+    },
+    "pyscript": {
+      "documentation": "https://github.com/custom-components/pyscript",
+      "version": "1.7.0",
+      "requirements": [
+        "croniter==6.0.0",
+        "watchdog==6.0.0"
+      ]
+    },
+    "nordpool": {
+      "documentation": "https://github.com/custom-components/nordpool/",
+      "version": "0.0.18",
+      "requirements": [
+        "backoff"
+      ]
+    },
+    "spook_inverse": {
+      "documentation": "https://spook.boo",
+      "version": "4.0.1",
+      "requirements": []
+    },
+    "ble_monitor": {
+      "documentation": "https://github.com/custom-components/ble_monitor",
+      "version": "13.12.0",
+      "requirements": [
+        "pycryptodomex>=3.23.0",
+        "janus>=2.0.0",
+        "aioblescan>=0.2.14",
+        "btsocket>=0.3.0",
+        "pyric>=0.1.6.3"
+      ]
+    },
+    "spook": {
+      "documentation": "https://spook.boo",
+      "version": "4.0.1",
+      "requirements": []
+    },
+    "powercalc": {
+      "documentation": "https://docs.powercalc.nl",
+      "version": "v1.20.12",
+      "requirements": [
+        "numpy>=1.21.1"
+      ]
+    },
+    "geekmagic": {
+      "documentation": "https://github.com/adrienbrault/geekmagic-hacs",
+      "version": "1.0.0",
+      "requirements": [
+        "pillow>=10.0.0",
+        "palettable>=3.3.0",
+        "stretchable>=1.0.0"
+      ]
+    }
+  },
+  "integration_manifest": {
+    "domain": "zero_grid_controller",
+    "name": "Zero Grid Controller",
+    "version": "0.1.0",
+    "config_flow": true,
+    "single_config_entry": true,
+    "sub_entries": true,
+    "iot_class": "local_polling",
+    "requirements": [],
+    "dependencies": [],
+    "codeowners": [
+      "bvweerd"
+    ],
+    "documentation": "https://github.com/bvweerd/Zero-Grid-Controller",
+    "issue_tracker": "https://github.com/bvweerd/Zero-Grid-Controller/issues",
+    "quality_scale": "bronze",
+    "homeassistant": ">=2024.11.0",
+    "after_dependencies": [
+      "recorder"
+    ],
+    "is_built_in": false,
+    "overwrites_built_in": false
+  },
+  "setup_times": {
+    "null": {
+      "setup": 0.00017934100469574332
+    },
+    "01KP0HX4JRZZM3ZXHFVAHWD5RG": {
+      "wait_import_platforms": -7.081529755028896,
+      "config_entry_setup": 7.093508414982352
+    }
+  },
+  "data": {
+    "status": "active",
+    "grid_raw_w": -1024.0,
+    "grid_filtered_w": -1024.88809918498,
+    "pid_output_w": -618.9292324469716,
+    "setpoints": {
+      "Zolder": 87.0,
+      "Zuid": 87.0
+    },
+    "battery_setpoints": {},
+    "pid": {
+      "kp": 0.5,
+      "ki": 0.02,
+      "kd": 0.0,
+      "integral": -5324.259,
+      "basis": {
+        "total_w_per_unit": 46.918,
+        "included_arrays": [
+          "Zolder",
+          "Zuid"
+        ]
+      }
+    },
+    "arrays": [
+      {
+        "name": "Zolder",
+        "output_type": "percent",
+        "setpoint_min": 0.0,
+        "setpoint_max": 100.0,
+        "w_per_unit": 36.90667114257825,
+        "settling_time_s": 45,
+        "settling_down_s": 20,
+        "settling_up_s": 30,
+        "power_sensor_entity": "sensor.ral1ch8035_grid_power",
+        "derived_max_power_w": 3690.667,
+        "calibration_confidence": "measured"
+      },
+      {
+        "name": "Zuid",
+        "output_type": "percent",
+        "setpoint_min": 0.0,
+        "setpoint_max": 100.0,
+        "w_per_unit": 10.011667378743534,
+        "settling_time_s": 45,
+        "settling_down_s": 15,
+        "settling_up_s": 20,
+        "power_sensor_entity": "sensor.qnb2827044_grid_power",
+        "derived_max_power_w": 1001.167,
+        "calibration_confidence": "measured"
+      },
+      {
+        "name": "Prieel",
+        "output_type": "switch",
+        "setpoint_min": 0.0,
+        "setpoint_max": 100.0,
+        "w_per_unit": 10.0,
+        "settling_time_s": 15,
+        "settling_down_s": null,
+        "settling_up_s": null,
+        "power_sensor_entity": null,
+        "derived_max_power_w": null,
+        "calibration_confidence": "estimated"
+      }
+    ],
+    "batteries": [],
+    "config": {
+      "deadband_w": 20.0,
+      "ewm_alpha": 0.9,
+      "aggressiveness": "fast",
+      "controller_enabled": true
+    }
+  },
+  "issues": [
+    {
+      "created": "2026-04-11T16:09:11.242772+00:00",
+      "dismissed_version": "2026.4.1",
+      "domain": "zero_grid_controller",
+      "is_persistent": false,
+      "issue_id": "calibration_not_converging"
+    }
+  ]
+}

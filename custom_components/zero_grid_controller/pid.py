@@ -8,8 +8,8 @@ from .const import CONTROL_DT_MIN
 class PIDController:
     """Discrete PID controller with conditional anti-windup.
 
-    Positive output  = tighten limit (grid_w was positive = importing from grid).
-    Negative output  = open limit   (grid_w was negative = exporting to grid).
+    Positive output = open limit   (grid_w was negative = exporting too much).
+    Negative output = tighten limit (grid_w was positive = importing from grid).
     """
 
     def __init__(

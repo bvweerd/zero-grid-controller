@@ -380,7 +380,7 @@ async def test_apply_switch_hysteresis_honors_debounce(hass):
     assert coordinator._current_setpoints["Switch"] == 0.0
 
 
-async def test_update_data_resets_negative_battery_target_and_freezes_when_settling(
+async def test_update_data_resets_negative_battery_target_while_array_settling(
     hass,
 ):
     entry = _make_entry(deadband_w=5.0, ewm_alpha=1.0)
@@ -418,14 +418,12 @@ async def test_update_data_resets_negative_battery_target_and_freezes_when_settl
         patch.object(
             coordinator._actuators, "write_numeric_entity", new=AsyncMock()
         ) as mock_write,
-        patch.object(coordinator._pid, "freeze_integrator") as mock_freeze,
         patch.object(coordinator._actuators, "write_setpoint", new=AsyncMock()),
     ):
         result = await coordinator._async_update_data()
 
     assert result.status == STATUS_ACTIVE
     mock_write.assert_awaited()
-    mock_freeze.assert_called()
 
 
 async def test_apply_switch_hysteresis_noop_below_threshold(hass):
@@ -508,7 +506,7 @@ async def test_persist_calibration_results_updates_matching_subentry(hass):
     assert coordinator.arrays[0].settling_time_s == 9
     assert coordinator.arrays[0].calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
     assert coordinator.arrays[0].derived_max_power_w == pytest.approx(1500.0)
-    assert coordinator._pid.kp == pytest.approx(1.0 / 15.0, rel=0.01)
+    assert coordinator._pid.kp == pytest.approx(1.0, rel=0.01)
 
 
 async def test_persist_calibration_results_skips_unsuccessful_or_unknown_arrays(hass):

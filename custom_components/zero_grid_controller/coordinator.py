@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -35,7 +34,6 @@ from .const import (
     CONF_KI,
     CONF_KP,
     CONF_OUTPUT_MAX_W,
-    CONF_POWER_SENSOR_ENTITY,
     CONF_SETTLING_TIME_S,
     CONF_SETTLING_UP_S,
     CONF_W_PER_UNIT,
@@ -284,14 +282,6 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         residual = filtered - battery_cmd_w
 
         # 7a. Numeric arrays: PID on residual
-        any_settling = any(
-            now < self._settling_until.get(a.name, 0.0)
-            for a in self.arrays
-            if not a.is_switch
-        )
-        if any_settling:
-            self._pid.freeze_integrator()
-
         # Negate: PID error = setpoint - (-residual) = residual
         # → positive output when importing (curtail PV), negative when exporting (open)
         pid_output = self._pid.compute(-residual, dt)
@@ -391,11 +381,13 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
         for array in active:
             share_w = delta_w * headrooms[array.name] / total_headroom
-            delta_units = share_w / array.w_per_unit
-            delta_units = (
-                math.floor(delta_units) if delta_w > 0 else math.ceil(delta_units)
-            )
+            delta_units = round(share_w / array.w_per_unit)
             if delta_units == 0:
+                continue
+
+            # Cloud-shadow guard: only block when *opening* the limit.
+            # Curtailment is always safe regardless of actual production.
+            if delta_units > 0 and not self._can_open(array):
                 continue
 
             current = self._current_setpoints.get(array.name, array.setpoint_max)
@@ -408,7 +400,28 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
             await self._actuators.write_setpoint(array, new_sp)
             self._current_setpoints[array.name] = new_sp
-            self._settling_until[array.name] = now + array.settling_time_s
+            settle_s = (
+                (array.settling_up_s or array.settling_time_s)
+                if delta_units > 0
+                else (array.settling_down_s or array.settling_time_s)
+            )
+            self._settling_until[array.name] = now + settle_s
+
+    def _can_open(self, array: ArrayConfig) -> bool:
+        """Return True if the array may increase its setpoint.
+
+        Reads the power sensor to prevent opening the limit during cloud shadow:
+        only allow raising the setpoint when the inverter is actually producing
+        close to its current commanded output.  Fails open when no sensor is
+        configured or the sensor is unavailable.
+        """
+        if array.power_sensor_entity is None:
+            return True
+        actual = self._read_sensor_safe(array.power_sensor_entity)
+        if actual is None:
+            return True
+        current_sp = self._current_setpoints.get(array.name, array.setpoint_max)
+        return actual >= (current_sp - 1) * array.w_per_unit
 
     async def _apply_switch_hysteresis(self, residual: float, now: float) -> None:
         """Turn switch arrays on/off based on residual power."""
@@ -418,7 +431,16 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             if now < self._settling_until.get(array.name, 0.0):
                 continue
 
-            current = self._current_setpoints.get(array.name, array.setpoint_min)
+            if array.name not in self._current_setpoints:
+                # Initialise from the actual entity state so the controller
+                # does not wrongly assume the switch is off on first run.
+                state = self.hass.states.get(array.setpoint_entity)
+                if state is not None and state.state not in ("unavailable", "unknown"):
+                    initial = array.setpoint_max if state.state == "on" else array.setpoint_min
+                else:
+                    initial = array.setpoint_min
+                self._current_setpoints[array.name] = initial
+            current = self._current_setpoints[array.name]
             is_on = current > array.setpoint_min
 
             if not is_on and residual >= array.switch_on_threshold_w:
@@ -510,7 +532,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             return None
 
         factor = AGGRESSIVENESS_FACTORS.get(self._aggressiveness, 1.0)
-        kp = round(factor / total_w_per_unit, 4)
+        kp = round(factor, 4)
         ki = round(kp * AGGRESSIVENESS_KI_RATIO, 5)
         return kp, ki
 

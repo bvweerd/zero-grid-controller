@@ -85,14 +85,14 @@ CONTROL_DT_MAX = 10.0
 CONTROL_INTERVAL_S = 5
 
 # Aggressiveness → PID factor mapping
-# Kp = aggressiveness_factor / total_w_per_unit
+# Kp = aggressiveness_factor  (direct — distribution headroom handles system-size scaling)
 AGGRESSIVENESS_FACTORS = {
-    "cautious": 0.4,
+    "cautious": 0.5,
     "normal": 1.0,
-    "fast": 2.0,
+    "fast": 1.5,
 }
-# Ki = Kp × KI_RATIO
-AGGRESSIVENESS_KI_RATIO = 0.05
+# Ki = Kp × KI_RATIO  (integrator time constant = kp/ki ≈ 100 s for normal)
+AGGRESSIVENESS_KI_RATIO = 0.01
 
 # Output types
 OUTPUT_TYPE_PERCENT = "percent"

@@ -230,7 +230,7 @@ class ArrayCalibrator:
             return 0.0, 0.0
 
         factor = AGGRESSIVENESS_FACTORS.get(self._aggressiveness, 1.0)
-        kp = factor / total_w_per_unit
+        kp = factor
         ki = kp * AGGRESSIVENESS_KI_RATIO
         return round(kp, 4), round(ki, 5)
 
