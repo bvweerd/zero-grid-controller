@@ -504,7 +504,9 @@ async def test_persist_calibration_results_updates_matching_subentry(hass):
     mock_update_entry.assert_called_once()
     assert coordinator.arrays[0].w_per_unit == 15.0
     assert coordinator.arrays[0].settling_time_s == 9
-    assert coordinator.arrays[0].calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
+    assert (
+        coordinator.arrays[0].calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
+    )
     assert coordinator.arrays[0].derived_max_power_w == pytest.approx(1500.0)
     assert coordinator._pid.kp == pytest.approx(1.0, rel=0.01)
 

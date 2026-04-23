@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -53,10 +54,8 @@ def _calibrator(arrays, sensor_readings, aggressiveness="normal"):
     def advance(entity_id: str) -> None:
         if entity_id not in read_iters:
             return
-        try:
+        with contextlib.suppress(StopIteration):
             states[entity_id].state = str(next(read_iters[entity_id]))
-        except StopIteration:
-            pass
 
     write_setpoint = AsyncMock()
     return (

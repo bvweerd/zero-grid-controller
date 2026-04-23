@@ -208,6 +208,12 @@
       }
     }
   },
+  "issues": {
+    "grid_sensor_unavailable": {
+      "title": "Grid sensor unavailable",
+      "description": "The configured grid power sensor(s) are unavailable. Zero Grid Controller cannot measure grid power and has entered safe state. Check that your grid sensors are online and reporting valid states."
+    }
+  },
   "exceptions": {
     "coordinator_update_failed": {
       "message": "Zero Grid Controller update failed: {error}"

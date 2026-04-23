@@ -24,9 +24,8 @@ from .const import (
     CONF_AGGRESSIVENESS,
     CONF_CALIBRATION_CONFIDENCE,
     CONF_CONTROLLER_ENABLED,
-    CONF_DERIVED_MAX_POWER_W,
-    CONF_SETTLING_DOWN_S,
     CONF_DEADBAND_W,
+    CONF_DERIVED_MAX_POWER_W,
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
@@ -34,6 +33,7 @@ from .const import (
     CONF_KI,
     CONF_KP,
     CONF_OUTPUT_MAX_W,
+    CONF_SETTLING_DOWN_S,
     CONF_SETTLING_TIME_S,
     CONF_SETTLING_UP_S,
     CONF_W_PER_UNIT,
@@ -52,6 +52,7 @@ from .const import (
     STATUS_DISABLED,
 )
 from .pid import PIDController
+from .repairs import dismiss_grid_sensor_unavailable, raise_grid_sensor_unavailable
 from .utils import clamp
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._current_battery_setpoints: dict[str, float] = {}
         self._settling_until: dict[str, float] = {}
         self._calibrator: ArrayCalibrator | None = None
+        self._grid_sensor_unavailable: bool = False
 
         self._init_from_entry(entry)
 
@@ -195,6 +197,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         # 1. Read grid
         grid_raw = await self._read_grid()
         if grid_raw is None:
+            if not self._grid_sensor_unavailable:
+                self._grid_sensor_unavailable = True
+                raise_grid_sensor_unavailable(self.hass)
             _LOGGER.warning("Grid sensor(s) unavailable, entering safe state")
             self._pid.reset()
             await self._actuators.enter_safe_state(
@@ -206,6 +211,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 pid_output_w=0.0,
                 status=STATUS_DISABLED,
             )
+        if self._grid_sensor_unavailable:
+            self._grid_sensor_unavailable = False
+            dismiss_grid_sensor_unavailable(self.hass)
 
         # 2. EWM filter
         if self._filtered_w is None:
@@ -296,9 +304,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 for a in numeric
             )
             if all_maxed or not numeric:
-                total_discharge_cap = sum(
-                    b.max_discharge_w for b in self.batteries
-                )
+                total_discharge_cap = sum(b.max_discharge_w for b in self.batteries)
                 discharge_w = min(total_discharge_cap, abs(residual))
                 for battery in self.batteries:
                     target = discharge_w * battery.max_discharge_w / total_discharge_cap
@@ -432,7 +438,11 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 # does not wrongly assume the switch is off on first run.
                 state = self.hass.states.get(array.setpoint_entity)
                 if state is not None and state.state not in ("unavailable", "unknown"):
-                    initial = array.setpoint_max if state.state == "on" else array.setpoint_min
+                    initial = (
+                        array.setpoint_max
+                        if state.state == "on"
+                        else array.setpoint_min
+                    )
                 else:
                     initial = array.setpoint_min
                 self._current_setpoints[array.name] = initial
@@ -541,9 +551,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             and array.calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
         ]
         total_w_per_unit = sum(
-            array.w_per_unit
-            for array in self.arrays
-            if array.name in included_arrays
+            array.w_per_unit for array in self.arrays if array.name in included_arrays
         )
         return {
             "total_w_per_unit": round(total_w_per_unit, 3),

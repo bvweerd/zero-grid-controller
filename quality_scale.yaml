@@ -11,8 +11,10 @@ rules:
       DataUpdateCoordinator with a 5-second update interval, appropriate for
       real-time grid power control.
   brands:
-    status: todo
-    comment: brands.json not yet submitted to home-assistant/brands.
+    status: done
+    comment: >
+      icon.png and logo.png placed in custom_components/zero_grid_controller/brand/
+      (served by HA via /api/brands/integration/zero_grid_controller/ since 2026.3).
   common-modules:
     status: done
     comment: >
@@ -199,8 +201,11 @@ rules:
       OptionsFlow for main settings; ArraySubEntryFlow.async_step_reconfigure
       for per-array reconfiguration.
   repair-issues:
-    status: todo
-    comment: repairs.py not yet implemented.
+    status: done
+    comment: >
+      repairs.py implements raise_grid_sensor_unavailable and dismiss_grid_sensor_unavailable
+      using async_create_issue/async_delete_issue. ZeroGridCoordinator._async_update_data
+      raises the issue on first unavailable cycle and dismisses it on recovery.
   stale-devices:
     status: done
     comment: >
@@ -217,5 +222,5 @@ rules:
     status: exempt
     comment: No HTTP calls; integration reads local HA states only.
   strict-typing:
-    status: todo
-    comment: mypy --strict not yet verified; type annotations present throughout.
+    status: done
+    comment: mypy --strict passes with no issues on all 16 source files.

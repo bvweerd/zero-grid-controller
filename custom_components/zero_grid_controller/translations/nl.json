@@ -208,6 +208,12 @@
       }
     }
   },
+  "issues": {
+    "grid_sensor_unavailable": {
+      "title": "Gridsensor niet beschikbaar",
+      "description": "De geconfigureerde gridsensoren zijn niet beschikbaar. Zero Grid Controller kan het gridvermogen niet meten en heeft een veilige toestand aangenomen. Controleer of de gridsensoren online zijn en geldige waarden rapporteren."
+    }
+  },
   "exceptions": {
     "coordinator_update_failed": {
       "message": "Zero Grid Controller update mislukt: {error}"

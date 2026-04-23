@@ -14,7 +14,6 @@ from .array import ArrayConfig
 from .const import (
     AGGRESSIVENESS_FACTORS,
     AGGRESSIVENESS_KI_RATIO,
-    CALIBRATION_CONFIDENCE_MEASURED,
     CALIB_INTER_ARRAY_SLEEP_S,
     CALIB_MAX_TIME_S,
     CALIB_MIN_W_PER_UNIT,
@@ -22,6 +21,7 @@ from .const import (
     CALIB_SETTLING_MAX_S,
     CALIB_SETTLING_MIN_S,
     CALIB_SETTLING_THRESHOLD_W,
+    CALIBRATION_CONFIDENCE_MEASURED,
     CONTROL_INTERVAL_S,
 )
 
@@ -131,7 +131,9 @@ class ArrayCalibrator:
             self._current_setpoints[array.name] = setpoint_30
             power_30_up, settle_30_up = await self._wait_for_stable_power(array)
             if power_30_up is None or settle_30_up is None:
-                return self._failed(array, "Power sensor did not settle after returning to 30%")
+                return self._failed(
+                    array, "Power sensor did not settle after returning to 30%"
+                )
         finally:
             await self._write_setpoint(array, start_sp)
             self._current_setpoints[array.name] = start_sp
@@ -213,9 +215,7 @@ class ArrayCalibrator:
     ) -> tuple[float, float]:
         """Compute global gains from successful measured numeric arrays."""
         overrides = {
-            result.array_name: result.w_per_unit
-            for result in results
-            if result.success
+            result.array_name: result.w_per_unit for result in results if result.success
         }
         total_w_per_unit = sum(
             overrides.get(array.name, array.w_per_unit)

@@ -10,7 +10,10 @@ from custom_components.zero_grid_controller import ZGCData
 from custom_components.zero_grid_controller.array import ArrayConfig
 from custom_components.zero_grid_controller.battery import BatteryConfig
 from custom_components.zero_grid_controller.const import DOMAIN
-from custom_components.zero_grid_controller.coordinator import ZGCResult, ZeroGridCoordinator
+from custom_components.zero_grid_controller.coordinator import (
+    ZeroGridCoordinator,
+    ZGCResult,
+)
 from custom_components.zero_grid_controller.diagnostics import (
     async_get_config_entry_diagnostics,
 )

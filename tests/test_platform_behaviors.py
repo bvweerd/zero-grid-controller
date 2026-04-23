@@ -12,6 +12,8 @@ from custom_components.zero_grid_controller import ZGCData
 from custom_components.zero_grid_controller.array import ArrayConfig
 from custom_components.zero_grid_controller.binary_sensor import (
     ZGCArraySwitchStateBinarySensor,
+)
+from custom_components.zero_grid_controller.binary_sensor import (
     async_setup_entry as binary_sensor_async_setup_entry,
 )
 from custom_components.zero_grid_controller.button import (
@@ -23,7 +25,10 @@ from custom_components.zero_grid_controller.const import (
     BATTERY_SUBENTRY_TYPE,
     DOMAIN,
 )
-from custom_components.zero_grid_controller.coordinator import ZGCResult, ZeroGridCoordinator
+from custom_components.zero_grid_controller.coordinator import (
+    ZeroGridCoordinator,
+    ZGCResult,
+)
 from custom_components.zero_grid_controller.number import (
     ZGCDeadbandNumber,
     ZGCFilterAlphaNumber,
@@ -35,6 +40,8 @@ from custom_components.zero_grid_controller.sensor import (
     ZGCGridRawSensor,
     ZGCPIDOutputSensor,
     ZGCStatusSensor,
+)
+from custom_components.zero_grid_controller.sensor import (
     async_setup_entry as sensor_async_setup_entry,
 )
 from custom_components.zero_grid_controller.switch import ZGCEnableSwitch
@@ -179,7 +186,9 @@ def test_sensor_entities_expose_native_values_and_none_branch(hass):
     assert ZGCPIDOutputSensor(coordinator, entry, device).native_value == -20.7
     assert ZGCStatusSensor(coordinator, entry, device).native_value == "active"
     assert (
-        ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value
+        ZGCArraySetpointSensor(
+            coordinator, entry, device, "array-1", "Solar"
+        ).native_value
         == 42.34
     )
     assert (
@@ -197,7 +206,9 @@ def test_sensor_entities_expose_native_values_and_none_branch(hass):
 
     coordinator.data = None
     assert (
-        ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value
+        ZGCArraySetpointSensor(
+            coordinator, entry, device, "array-1", "Solar"
+        ).native_value
         is None
     )
     assert (
@@ -215,7 +226,9 @@ def test_sensor_entities_expose_native_values_and_none_branch(hass):
 
     coordinator.data = ZGCResult(0.0, 0.0, 0.0, "idle", {}, {})
     assert (
-        ZGCArraySetpointSensor(coordinator, entry, device, "array-1", "Solar").native_value
+        ZGCArraySetpointSensor(
+            coordinator, entry, device, "array-1", "Solar"
+        ).native_value
         is None
     )
     assert (
@@ -263,7 +276,9 @@ async def test_button_entities_trigger_pid_reset_and_calibration(hass):
         coro.close()
         return MagicMock()
 
-    with patch.object(hass, "async_create_task", side_effect=_capture_task) as mock_create_task:
+    with patch.object(
+        hass, "async_create_task", side_effect=_capture_task
+    ) as mock_create_task:
         await recalibrate_button.async_press()
     mock_create_task.assert_called_once()
 

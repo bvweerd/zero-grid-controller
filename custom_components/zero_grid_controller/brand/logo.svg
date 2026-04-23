@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120">
+  <!-- Background -->
+  <rect width="400" height="120" rx="14" fill="#1565C0"/>
+  <!-- Icon: circle with sine wave -->
+  <circle cx="60" cy="60" r="46" fill="#1976D2"/>
+  <line x1="18" y1="60" x2="102" y2="60" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+  <path d="M18 60 Q33 36 48 60 T78 60 T102 60"
+        fill="none" stroke="#4FC3F7" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="95" cy="88" r="15" fill="#1565C0" stroke="#4FC3F7" stroke-width="2.5"/>
+  <text x="95" y="94" font-family="Arial, sans-serif" font-size="14"
+        font-weight="bold" text-anchor="middle" fill="white">0</text>
+  <!-- Text: Zero Grid Controller -->
+  <text x="130" y="52" font-family="Arial, sans-serif" font-size="28"
+        font-weight="bold" fill="white">Zero Grid</text>
+  <text x="130" y="84" font-family="Arial, sans-serif" font-size="22"
+        fill="#4FC3F7">Controller</text>
+</svg>

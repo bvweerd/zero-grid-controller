@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Background circle -->
+  <circle cx="50" cy="50" r="48" fill="#1565C0"/>
+  <!-- Grid zero-line -->
+  <line x1="18" y1="50" x2="82" y2="50" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+  <!-- Sine wave (grid power signal centred at 0) -->
+  <path d="M18 50 Q30 22 42 50 T66 50 T82 50"
+        fill="none" stroke="#4FC3F7" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Zero badge -->
+  <circle cx="74" cy="74" r="16" fill="#1565C0" stroke="#4FC3F7" stroke-width="3"/>
+  <text x="74" y="80" font-family="Arial, sans-serif" font-size="16"
+        font-weight="bold" text-anchor="middle" fill="white">0</text>
+</svg>

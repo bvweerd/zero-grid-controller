@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ARRAY_SUBENTRY_TYPE, OUTPUT_TYPE_SWITCH
-from .coordinator import ZGCResult, ZeroGridCoordinator
+from .coordinator import ZeroGridCoordinator, ZGCResult
 
 
 async def async_setup_entry(
