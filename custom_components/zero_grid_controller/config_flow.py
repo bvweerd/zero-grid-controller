@@ -485,9 +485,16 @@ class ZeroGridOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         defaults = {**self._config_entry.data, **self._config_entry.options}
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            if not user_input.get(CONF_GRID_IMPORT_SENSORS) and not user_input.get(
+                CONF_GRID_EXPORT_SENSORS
+            ):
+                errors["base"] = "no_sensors"
+            if not errors:
+                return self.async_create_entry(data=user_input)
         return self.async_show_form(
             step_id="init",
             data_schema=_main_schema(user_input or defaults),
+            errors=errors,
         )

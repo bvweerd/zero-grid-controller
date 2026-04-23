@@ -3,8 +3,8 @@ rules:
   action-setup:
     status: done
     comment: >
-      Three service actions registered in __init__.py: reset_pid, recalibrate,
-      and override_setpoint. Defined in services.yaml.
+      Two service actions registered in __init__.py: reset_pid and recalibrate.
+      Defined in services.yaml.
   appropriate-polling:
     status: done
     comment: >
@@ -37,7 +37,7 @@ rules:
       Home Assistant built-in helpers.
   docs-actions:
     status: done
-    comment: services.yaml documents all four service actions with fields and examples.
+    comment: services.yaml documents both service actions with fields and examples.
   docs-high-level-description:
     status: done
     comment: README "What does it do?" section.
@@ -199,13 +199,8 @@ rules:
       OptionsFlow for main settings; ArraySubEntryFlow.async_step_reconfigure
       for per-array reconfiguration.
   repair-issues:
-    status: done
-    comment: >
-      repairs.py implements raise_grid_sensor_unavailable and dismiss_grid_sensor_unavailable
-      using async_create_issue/async_delete_issue. ZeroGridCoordinator._run_control_loop
-      checks _is_grid_sensor_unavailable() each cycle and raises/dismisses the
-      ISSUE_GRID_SENSOR_UNAVAILABLE repair issue accordingly. Issue translation key
-      added to strings.json and translations/en.json.
+    status: todo
+    comment: repairs.py not yet implemented.
   stale-devices:
     status: done
     comment: >

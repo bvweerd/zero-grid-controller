@@ -256,13 +256,10 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
         # 5. Battery charge layer (export: grid < 0 → charge batteries)
         if filtered < 0 and self.batteries:
-            charge_w = min(
-                sum(b.max_charge_w for b in self.batteries),
-                abs(filtered),
-            )
-            per_battery = charge_w / len(self.batteries)
+            total_charge_cap = sum(b.max_charge_w for b in self.batteries)
+            charge_w = min(total_charge_cap, abs(filtered))
             for battery in self.batteries:
-                target = -min(battery.max_charge_w, per_battery)
+                target = -(charge_w * battery.max_charge_w / total_charge_cap)
                 await self._actuators.write_numeric_entity(
                     battery.setpoint_entity, target
                 )
@@ -283,7 +280,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
         # 7a. Numeric arrays: PID on residual
         # Negate: PID error = setpoint - (-residual) = residual
-        # → positive output when importing (curtail PV), negative when exporting (open)
+        # → positive output when importing (open PV), negative when exporting (curtail PV)
         pid_output = self._pid.compute(-residual, dt)
 
         await self._distribute_to_numeric_arrays(pid_output, now)
@@ -299,13 +296,12 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 for a in numeric
             )
             if all_maxed or not numeric:
-                discharge_w = min(
-                    sum(b.max_discharge_w for b in self.batteries),
-                    abs(residual),
+                total_discharge_cap = sum(
+                    b.max_discharge_w for b in self.batteries
                 )
-                per_battery = discharge_w / len(self.batteries)
+                discharge_w = min(total_discharge_cap, abs(residual))
                 for battery in self.batteries:
-                    target = min(battery.max_discharge_w, per_battery)
+                    target = discharge_w * battery.max_discharge_w / total_discharge_cap
                     await self._actuators.write_numeric_entity(
                         battery.setpoint_entity, target
                     )

@@ -6,3 +6,9 @@ __pycache__/
 dist/
 build/
 .mypy_cache/
+
+# Developer-local artifacts
+diagnostics.json
+deploy.sh
+automation.yaml
+history.csv
