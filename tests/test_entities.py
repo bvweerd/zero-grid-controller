@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.zero_grid_controller.const import DOMAIN
@@ -36,14 +37,26 @@ async def _setup(hass):
 
 async def test_sensors_registered(hass):
     await _setup(hass)
-    all_states = hass.states.async_all("sensor")
-    assert len(all_states) >= 3  # grid_raw, grid_filtered, pid_output, status
+    # grid_raw and pid_output are disabled by default; count via entity registry.
+    registry = er.async_get(hass)
+    sensor_entries = [
+        e
+        for e in registry.entities.values()
+        if e.platform == DOMAIN and e.domain == "sensor"
+    ]
+    assert len(sensor_entries) >= 4  # grid_raw, grid_filtered, pid_output, status
 
 
 async def test_numbers_registered(hass):
     await _setup(hass)
-    all_states = hass.states.async_all("number")
-    assert len(all_states) >= 2  # deadband, ewm_alpha
+    # Number entities are disabled by default; check the entity registry, not states.
+    registry = er.async_get(hass)
+    number_entries = [
+        e
+        for e in registry.entities.values()
+        if e.platform == DOMAIN and e.domain == "number"
+    ]
+    assert len(number_entries) >= 2  # deadband, ewm_alpha
 
 
 async def test_buttons_registered(hass):

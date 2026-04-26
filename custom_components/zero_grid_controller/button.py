@@ -53,7 +53,7 @@ class ZGCResetPIDButton(ButtonEntity):
         self._attr_device_info = device
 
     async def async_press(self) -> None:
-        self._coordinator._pid.reset()
+        self._coordinator.reset_pid()
 
 
 class ZGCRecalibrateButton(ButtonEntity):

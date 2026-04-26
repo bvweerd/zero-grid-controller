@@ -84,7 +84,8 @@
       "error": {
         "min_gte_max": "Minimum setpoint must be less than maximum.",
         "off_gte_on": "Turn-off threshold must be less than turn-on threshold.",
-        "duplicate_name": "This array name is already in use."
+        "duplicate_name": "This array name is already in use.",
+        "name_required": "Array name cannot be empty."
       }
     },
     "battery": {
@@ -125,7 +126,8 @@
         }
       },
       "error": {
-        "duplicate_name": "This battery name is already in use."
+        "duplicate_name": "This battery name is already in use.",
+        "name_required": "Battery name cannot be empty."
       }
     }
   },

@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .actuator_manager import ActuatorManager
 from .array import ArrayConfig, array_config_from_subentry
@@ -47,6 +47,7 @@ from .const import (
     DEFAULT_KI,
     DEFAULT_KP,
     DEFAULT_OUTPUT_MAX_W,
+    DOMAIN,
     STATUS_ACTIVE,
     STATUS_DEADBAND,
     STATUS_DISABLED,
@@ -190,6 +191,17 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
     async def _async_update_data(self) -> ZGCResult:
         """Main control cycle, called every CONTROL_INTERVAL_S seconds."""
+        try:
+            return await self._run_control_cycle()
+        except Exception as err:
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="coordinator_update_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+    async def _run_control_cycle(self) -> ZGCResult:
+        """Inner control cycle logic."""
         now = time.monotonic()
         dt = clamp(now - self._last_update, CONTROL_DT_MIN, CONTROL_DT_MAX)
         self._last_update = now
@@ -265,22 +277,35 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         # 5. Battery charge layer (export: grid < 0 → charge batteries)
         if filtered < 0 and self.batteries:
             total_charge_cap = sum(b.max_charge_w for b in self.batteries)
-            charge_w = min(total_charge_cap, abs(filtered))
-            for battery in self.batteries:
-                target = -(charge_w * battery.max_charge_w / total_charge_cap)
-                await self._actuators.write_numeric_entity(
-                    battery.setpoint_entity, target
-                )
-                self._current_battery_setpoints[battery.name] = target
+            if total_charge_cap > 0:
+                charge_w = min(total_charge_cap, abs(filtered))
+                for battery in self.batteries:
+                    target = -(charge_w * battery.max_charge_w / total_charge_cap)
+                    try:
+                        await self._actuators.write_numeric_entity(
+                            battery.setpoint_entity, target
+                        )
+                    except Exception:
+                        _LOGGER.exception(
+                            "Failed to write charge setpoint for %s", battery.name
+                        )
+                    else:
+                        self._current_battery_setpoints[battery.name] = target
 
         elif filtered > 0 and self.batteries:
             # Reset charge targets when importing
             for battery in self.batteries:
                 if self._current_battery_setpoints.get(battery.name, 0.0) < 0:
-                    await self._actuators.write_numeric_entity(
-                        battery.setpoint_entity, 0.0
-                    )
-                    self._current_battery_setpoints[battery.name] = 0.0
+                    try:
+                        await self._actuators.write_numeric_entity(
+                            battery.setpoint_entity, 0.0
+                        )
+                    except Exception:
+                        _LOGGER.exception(
+                            "Failed to reset charge setpoint for %s", battery.name
+                        )
+                    else:
+                        self._current_battery_setpoints[battery.name] = 0.0
 
         # 6. Residual after battery pre-compensation
         battery_cmd_w = sum(self._current_battery_setpoints.values())
@@ -305,13 +330,23 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             )
             if all_maxed or not numeric:
                 total_discharge_cap = sum(b.max_discharge_w for b in self.batteries)
-                discharge_w = min(total_discharge_cap, abs(residual))
-                for battery in self.batteries:
-                    target = discharge_w * battery.max_discharge_w / total_discharge_cap
-                    await self._actuators.write_numeric_entity(
-                        battery.setpoint_entity, target
-                    )
-                    self._current_battery_setpoints[battery.name] = target
+                if total_discharge_cap > 0:
+                    discharge_w = min(total_discharge_cap, abs(residual))
+                    for battery in self.batteries:
+                        target = (
+                            discharge_w * battery.max_discharge_w / total_discharge_cap
+                        )
+                        try:
+                            await self._actuators.write_numeric_entity(
+                                battery.setpoint_entity, target
+                            )
+                        except Exception:
+                            _LOGGER.exception(
+                                "Failed to write discharge setpoint for %s",
+                                battery.name,
+                            )
+                        else:
+                            self._current_battery_setpoints[battery.name] = target
 
         return ZGCResult(
             grid_raw_w=grid_raw,
@@ -325,6 +360,19 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @property
+    def enabled(self) -> bool:
+        """Return True if the controller is enabled."""
+        return self._enabled
+
+    def set_enabled(self, value: bool) -> None:
+        """Enable or disable the controller."""
+        self._enabled = value
+
+    def reset_pid(self) -> None:
+        """Reset the PID controller state."""
+        self._pid.reset()
 
     def _is_enabled(self) -> bool:
         """Return True if the controller should be active."""
@@ -365,15 +413,28 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         if not active or delta_w == 0:
             return
 
+        # Initialise setpoints from actual entity state on first encounter so
+        # headroom is computed from the real position, not assumed setpoint_max.
+        for a in active:
+            if a.name not in self._current_setpoints:
+                state = self.hass.states.get(a.setpoint_entity)
+                if state is not None and state.state not in ("unavailable", "unknown"):
+                    try:
+                        self._current_setpoints[a.name] = clamp(
+                            float(state.state), a.setpoint_min, a.setpoint_max
+                        )
+                    except ValueError:
+                        self._current_setpoints[a.name] = a.setpoint_max
+                else:
+                    self._current_setpoints[a.name] = a.setpoint_max
+
         # delta_w > 0: import → open PV (raise setpoint) → headroom_down
         # delta_w < 0: export → curtail PV (lower setpoint) → headroom_up
         headrooms = {
             a.name: (
-                a.headroom_down_w(self._current_setpoints.get(a.name, a.setpoint_max))
+                a.headroom_down_w(self._current_setpoints[a.name])
                 if delta_w > 0
-                else a.headroom_up_w(
-                    self._current_setpoints.get(a.name, a.setpoint_max)
-                )
+                else a.headroom_up_w(self._current_setpoints[a.name])
             )
             for a in active
         }
@@ -382,6 +443,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             return
 
         for array in active:
+            if array.w_per_unit == 0:
+                continue
             share_w = delta_w * headrooms[array.name] / total_headroom
             delta_units = round(share_w / array.w_per_unit)
             if delta_units == 0:
@@ -392,7 +455,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             if delta_units > 0 and not self._can_open(array):
                 continue
 
-            current = self._current_setpoints.get(array.name, array.setpoint_max)
+            current = self._current_setpoints[array.name]
             # Positive delta_units: raise setpoint (open PV); negative: lower (curtail)
             new_sp = clamp(
                 current + delta_units, array.setpoint_min, array.setpoint_max

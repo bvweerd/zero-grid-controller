@@ -428,3 +428,144 @@ def test_array_and_battery_name_helpers_ignore_current_id():
     assert battery_flow._name_exists("Battery", current_id="battery-1") is False
     assert array_flow._array_name_exists("Solar", current_id=None) is True
     assert battery_flow._name_exists("Battery", current_id=None) is True
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests added during review
+# ---------------------------------------------------------------------------
+
+
+async def test_array_subentry_empty_name_rejected(hass):
+    """An empty (whitespace-only) array name must return name_required error."""
+    from homeassistant import config_entries
+
+    entry = _base_entry()
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {CONF_ARRAY_NAME: "   ", CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT},
+    )
+    assert result["type"] == "form"
+    assert result["errors"].get(CONF_ARRAY_NAME) == "name_required"
+
+
+async def test_battery_subentry_empty_name_rejected(hass):
+    """An empty (whitespace-only) battery name must return name_required error."""
+    from homeassistant import config_entries
+
+    entry = _base_entry()
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, BATTERY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "   ",
+            CONF_BATTERY_SENSOR: "sensor.battery_power",
+            CONF_BATTERY_MAX_CHARGE_W: 3000.0,
+            CONF_BATTERY_MAX_DISCHARGE_W: 5000.0,
+            CONF_BATTERY_SETPOINT_ENTITY: "number.battery_limit",
+        },
+    )
+    assert result["type"] == "form"
+    assert result["errors"].get(CONF_NAME) == "name_required"
+
+
+async def test_array_switch_off_threshold_gte_on_rejected(hass):
+    """off_threshold >= on_threshold must return off_gte_on error."""
+    from homeassistant import config_entries
+
+    entry = _base_entry()
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {CONF_ARRAY_NAME: "Switch PV", CONF_OUTPUT_TYPE: OUTPUT_TYPE_SWITCH},
+    )
+    # off_threshold (200) >= on_threshold (100): invalid
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            CONF_SETPOINT_ENTITY: "switch.solar_array",
+            CONF_SWITCH_ON_THRESHOLD_W: 100.0,
+            CONF_SWITCH_OFF_THRESHOLD_W: 200.0,
+        },
+    )
+    assert result["type"] == "form"
+    assert result["errors"].get(CONF_SWITCH_OFF_THRESHOLD_W) == "off_gte_on"
+
+
+async def test_array_reconfigure_keeps_same_name(hass):
+    """Reconfiguring an array and keeping its own name must not raise duplicate_name."""
+    from homeassistant import config_entries
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Zero Grid",
+        data=_base_entry().data,
+        options={},
+        subentries_data=(_array_subentry(subentry_id="array-1", name="Solar"),),
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "subentry_id": "array-1",
+        },
+    )
+    assert result["step_id"] == "reconfigure"
+
+    # Submit with the same name "Solar" — should NOT get duplicate_name
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {CONF_ARRAY_NAME: "Solar", CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT},
+    )
+    # Should advance to params step, not show an error
+    assert result["type"] in ("form", "create_entry", "abort")
+    assert result.get("errors", {}).get(CONF_ARRAY_NAME) != "duplicate_name"
+
+
+async def test_array_reconfigure_duplicate_name_rejected(hass):
+    """Reconfiguring an array to an existing different array's name must fail."""
+    from homeassistant import config_entries
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Zero Grid",
+        data=_base_entry().data,
+        options={},
+        subentries_data=(
+            _array_subentry(subentry_id="array-1", name="Solar"),
+            _array_subentry(subentry_id="array-2", name="Garage"),
+        ),
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, ARRAY_SUBENTRY_TYPE),
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "subentry_id": "array-1",
+        },
+    )
+    # Try to rename "Solar" to "Garage" (already taken by array-2)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {CONF_ARRAY_NAME: "Garage", CONF_OUTPUT_TYPE: OUTPUT_TYPE_PERCENT},
+    )
+    assert result["type"] == "form"
+    assert result["errors"].get(CONF_ARRAY_NAME) == "duplicate_name"

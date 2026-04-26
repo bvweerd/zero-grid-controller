@@ -81,7 +81,11 @@ class ArrayCalibrator:
                 _LOGGER.debug("Waiting %d s between arrays", CALIB_INTER_ARRAY_SLEEP_S)
                 await asyncio.sleep(CALIB_INTER_ARRAY_SLEEP_S)
 
-            result = await self._calibrate_array(array)
+            try:
+                result = await self._calibrate_array(array)
+            except Exception:
+                _LOGGER.exception("Unexpected error calibrating %s", array.name)
+                result = self._failed(array, "Unexpected error during calibration")
             results.append(result)
             _LOGGER.info(
                 "Calibration %s for %s: w_per_unit=%.2f, settling=%d s",

@@ -175,7 +175,7 @@ def _register_services(hass: HomeAssistant) -> None:
             if entry_id and entry.entry_id != entry_id:
                 continue
             if entry.runtime_data:
-                entry.runtime_data.coordinator._pid.reset()
+                entry.runtime_data.coordinator.reset_pid()
 
     hass.services.async_register(
         DOMAIN,

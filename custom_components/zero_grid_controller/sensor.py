@@ -106,6 +106,7 @@ class ZGCGridRawSensor(ZGCSensorBase):
     """Raw (unfiltered) grid power sensor."""
 
     _attr_translation_key = "grid_raw_w"
+    _attr_entity_registry_enabled_default = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT
@@ -146,6 +147,7 @@ class ZGCPIDOutputSensor(ZGCSensorBase):
     """PID output (setpoint adjustment) sensor."""
 
     _attr_translation_key = "pid_output_w"
+    _attr_entity_registry_enabled_default = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT

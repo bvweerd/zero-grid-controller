@@ -279,7 +279,9 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             name = str(user_input.get(CONF_ARRAY_NAME) or "").strip()
-            if name and self._array_name_exists(name, current_id=None):
+            if not name:
+                errors[CONF_ARRAY_NAME] = "name_required"
+            elif self._array_name_exists(name, current_id=None):
                 errors[CONF_ARRAY_NAME] = "duplicate_name"
             if not errors:
                 self._draft.update(user_input)
@@ -293,13 +295,23 @@ class ArraySubEntryFlow(config_entries.ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Step 1 (reconfigure): pre-filled name and output type."""
         self._reconfigure_mode = True
+        subentry = self._get_reconfigure_subentry()
         if not self._draft:
-            self._draft = dict(self._get_reconfigure_subentry().data)
+            self._draft = dict(subentry.data)
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._draft.update(user_input)
-            return await self._step_params()
+            name = str(user_input.get(CONF_ARRAY_NAME) or "").strip()
+            if not name:
+                errors[CONF_ARRAY_NAME] = "name_required"
+            elif self._array_name_exists(name, current_id=subentry.subentry_id):
+                errors[CONF_ARRAY_NAME] = "duplicate_name"
+            if not errors:
+                self._draft.update(user_input)
+                return await self._step_params()
         return self.async_show_form(
-            step_id="reconfigure", data_schema=_array_type_schema(self._draft)
+            step_id="reconfigure",
+            data_schema=_array_type_schema(self._draft),
+            errors=errors,
         )
 
     async def async_step_numeric_params(
@@ -389,12 +401,12 @@ class BatterySubEntryFlow(config_entries.ConfigSubentryFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             name = str(user_input.get(CONF_NAME) or "").strip()
-            if name and self._name_exists(name, current_id=None):
+            if not name:
+                errors[CONF_NAME] = "name_required"
+            elif self._name_exists(name, current_id=None):
                 errors[CONF_NAME] = "duplicate_name"
             if not errors:
-                return self.async_create_entry(
-                    title=user_input[CONF_NAME], data=user_input
-                )
+                return self.async_create_entry(title=name, data=user_input)
         return self.async_show_form(
             step_id="user",
             data_schema=_battery_schema(user_input or {}),

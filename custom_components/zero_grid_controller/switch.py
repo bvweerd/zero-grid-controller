@@ -48,7 +48,7 @@ class ZGCEnableSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return self._coordinator._enabled
+        return self._coordinator.enabled
 
     async def async_turn_on(self, **kwargs: object) -> None:
         await self._set(True)
@@ -57,7 +57,7 @@ class ZGCEnableSwitch(SwitchEntity):
         await self._set(False)
 
     async def _set(self, enabled: bool) -> None:
-        self._coordinator._enabled = enabled
+        self._coordinator.set_enabled(enabled)
         self.async_write_ha_state()
         options = {**self._entry.options, CONF_CONTROLLER_ENABLED: enabled}
         self.hass.config_entries.async_update_entry(self._entry, options=options)

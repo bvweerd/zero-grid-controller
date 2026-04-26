@@ -25,3 +25,18 @@ omit = ["tests/*"]
 
 [tool.coverage.report]
 omit = ["tests/*"]
+
+[tool.bumpversion]
+current_version = "0.1.0"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+commit = true
+tag = true
+tag_name = "v{new_version}"
+commit_args = "--no-verify"
+message = "chore: bump version to {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "custom_components/zero_grid_controller/manifest.json"
+search = '"version": "{current_version}"'
+replace = '"version": "{new_version}"'

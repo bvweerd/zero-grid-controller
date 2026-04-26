@@ -248,7 +248,7 @@ def test_sensor_entities_expose_native_values_and_none_branch(hass):
 async def test_button_entities_trigger_pid_reset_and_calibration(hass):
     entry = MockConfigEntry(domain=DOMAIN, title="Zero Grid", data={}, options={})
     coordinator = MagicMock()
-    coordinator._pid.reset = MagicMock()
+    coordinator.reset_pid = MagicMock()
     coordinator.arrays = [
         ArrayConfig(
             name="Solar",
@@ -266,7 +266,7 @@ async def test_button_entities_trigger_pid_reset_and_calibration(hass):
 
     reset_button = ZGCResetPIDButton(coordinator, entry, SimpleNamespace())
     await reset_button.async_press()
-    coordinator._pid.reset.assert_called_once()
+    coordinator.reset_pid.assert_called_once()
 
     recalibrate_button = ZGCRecalibrateButton(coordinator, entry, SimpleNamespace())
     captured = {}
@@ -331,7 +331,15 @@ async def test_enable_switch_updates_entry_option(hass):
         options={},
     )
     coordinator = MagicMock()
-    coordinator._enabled = False
+    # Track enabled state via set_enabled side-effect
+    _enabled_state = {"value": False}
+
+    def _set_enabled(val: bool) -> None:
+        _enabled_state["value"] = val
+
+    type(coordinator).enabled = property(lambda self: _enabled_state["value"])
+    coordinator.set_enabled.side_effect = _set_enabled
+
     entity = ZGCEnableSwitch(coordinator, entry, SimpleNamespace())
     entity.hass = hass
     entity.async_write_ha_state = MagicMock()

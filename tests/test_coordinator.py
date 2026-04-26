@@ -574,3 +574,182 @@ async def test_persist_calibration_results_skips_non_array_subentries(hass):
         )
 
     mock_update_subentry.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests added during review
+# ---------------------------------------------------------------------------
+
+
+async def test_distribute_skips_array_with_zero_w_per_unit(hass):
+    """Arrays with w_per_unit=0 must be skipped to avoid ZeroDivisionError."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.arrays = [
+        ArrayConfig(
+            name="Broken",
+            output_type="percent",
+            setpoint_entity="number.broken",
+            w_per_unit=0.0,
+            calibration_confidence="estimated",
+            setpoint_min=0.0,
+            setpoint_max=100.0,
+            settling_time_s=10,
+        )
+    ]
+    coordinator._current_setpoints = {"Broken": 50.0}
+
+    with patch.object(
+        coordinator._actuators, "write_setpoint", new=AsyncMock()
+    ) as mock_write:
+        # Should not raise ZeroDivisionError
+        await coordinator._distribute_to_numeric_arrays(200.0, now=0.0)
+
+    mock_write.assert_not_awaited()
+
+
+async def test_battery_charge_with_zero_total_capacity_skipped(hass):
+    """Battery charging is skipped when total_charge_cap is 0 to avoid NaN."""
+    entry = _make_entry(deadband_w=5.0, ewm_alpha=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.batteries = [
+        BatteryConfig(
+            subentry_id="bat-1",
+            name="Battery",
+            sensor_entity="sensor.battery_power",
+            max_charge_w=0.0,
+            max_discharge_w=0.0,
+            setpoint_entity="number.battery_sp",
+        )
+    ]
+    hass.states.async_set("sensor.grid_import", "0")
+    hass.states.async_set("sensor.grid_export", "300")  # exporting → filtered < 0
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        result = await coordinator._async_update_data()
+
+    # No NaN error, no write attempted when capacity is zero
+    mock_write.assert_not_awaited()
+    assert result.status == STATUS_ACTIVE
+
+
+async def test_battery_write_failure_does_not_abort_control_cycle(hass):
+    """An exception from a battery write must not crash the control cycle."""
+    entry = _make_entry(deadband_w=5.0, ewm_alpha=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.batteries = [
+        BatteryConfig(
+            subentry_id="bat-1",
+            name="Battery",
+            sensor_entity="sensor.battery_power",
+            max_charge_w=3000.0,
+            max_discharge_w=5000.0,
+            setpoint_entity="number.battery_sp",
+        )
+    ]
+    hass.states.async_set("sensor.grid_import", "0")
+    hass.states.async_set("sensor.grid_export", "300")  # exporting
+
+    failing_write = AsyncMock(side_effect=RuntimeError("HA service error"))
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=failing_write
+    ):
+        result = await coordinator._async_update_data()
+
+    # Control cycle completes despite write failure
+    assert result.status == STATUS_ACTIVE
+
+
+async def test_all_grid_sensors_none_enters_safe_state(hass):
+    """When both import and export sensors are unavailable, enter safe state."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    # Set sensors to unavailable
+    hass.states.async_set("sensor.grid_import", "unavailable")
+    hass.states.async_set("sensor.grid_export", "unavailable")
+
+    with patch.object(
+        coordinator._actuators, "enter_safe_state", new=AsyncMock()
+    ) as mock_safe:
+        result = await coordinator._async_update_data()
+
+    assert result.status == STATUS_DISABLED
+    mock_safe.assert_awaited_once()
+
+
+async def test_can_open_blocks_when_power_below_expected(hass):
+    """_can_open returns False when actual power is well below expected."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    array = ArrayConfig(
+        name="Solar",
+        output_type="percent",
+        setpoint_entity="number.solar_limit",
+        w_per_unit=10.0,
+        calibration_confidence="estimated",
+        setpoint_min=0.0,
+        setpoint_max=100.0,
+        settling_time_s=10,
+        power_sensor_entity="sensor.solar_power",
+    )
+    coordinator._current_setpoints = {"Solar": 80.0}
+    # Expected power at 80 units: (80 - 1) * 10 = 790 W; actual is 100 W
+    hass.states.async_set("sensor.solar_power", "100")
+    assert coordinator._can_open(array) is False
+
+
+async def test_can_open_allows_when_power_meets_expected(hass):
+    """_can_open returns True when actual power is at or above expected."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    array = ArrayConfig(
+        name="Solar",
+        output_type="percent",
+        setpoint_entity="number.solar_limit",
+        w_per_unit=10.0,
+        calibration_confidence="estimated",
+        setpoint_min=0.0,
+        setpoint_max=100.0,
+        settling_time_s=10,
+        power_sensor_entity="sensor.solar_power",
+    )
+    coordinator._current_setpoints = {"Solar": 80.0}
+    hass.states.async_set("sensor.solar_power", "800")
+    assert coordinator._can_open(array) is True
+
+
+async def test_numeric_array_reads_initial_setpoint_from_entity(hass):
+    """On first cycle, numeric arrays read actual entity state instead of defaulting to max."""
+    entry = _make_entry(deadband_w=5.0, ewm_alpha=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.arrays = [
+        ArrayConfig(
+            name="Solar",
+            output_type="percent",
+            setpoint_entity="number.solar_limit",
+            w_per_unit=10.0,
+            calibration_confidence="estimated",
+            setpoint_min=0.0,
+            setpoint_max=100.0,
+            settling_time_s=10,
+        )
+    ]
+    # Entity is currently at 30, not at setpoint_max (100)
+    hass.states.async_set("number.solar_limit", "30")
+    hass.states.async_set("sensor.grid_import", "50")
+    hass.states.async_set("sensor.grid_export", "0")
+
+    with patch.object(coordinator._actuators, "write_setpoint", new=AsyncMock()):
+        await coordinator._async_update_data()
+
+    # After first cycle, setpoint should be initialised from entity state, not from max
+    assert coordinator._current_setpoints.get("Solar", 100.0) < 100.0
