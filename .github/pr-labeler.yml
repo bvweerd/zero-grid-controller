@@ -1,0 +1,23 @@
+bug:
+  - changed-files:
+    - any-glob-to-any-file: []  # no file-based bug detection; use issue labels or manual
+
+enhancement:
+  - changed-files:
+    - any-glob-to-any-file:
+      - custom_components/zero_grid_controller/**
+
+documentation:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "*.md"
+      - docs/**
+      - custom_components/zero_grid_controller/translations/**
+      - custom_components/zero_grid_controller/strings.json
+
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file:
+      - requirements*.txt
+      - custom_components/zero_grid_controller/manifest.json
+      - setup.cfg
