@@ -665,6 +665,72 @@ async def test_switch_load_write_failure_setpoint_not_updated(hass):
     assert residual == pytest.approx(-3000.0)
 
 
+async def test_switch_load_unavailable_entity_setpoint_not_updated(hass):
+    """Switch entity unavailable: write_switch_entity raises, setpoint stays at 0."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=0)]
+    # Entity state is unavailable — real write_switch_entity will raise
+    hass.states.async_set("switch.boiler", "unavailable")
+
+    # Do NOT patch write_switch_entity: let the real implementation raise on
+    # unavailable entity so the coordinator's except block is exercised.
+    residual = await coordinator._apply_load_switch_hysteresis(-3000.0, now=0.0)
+
+    # write failed (entity unavailable) → setpoint must remain 0, no feedforward
+    assert coordinator._current_load_setpoints.get("Boiler", 0.0) == 0.0
+    assert residual == pytest.approx(-3000.0)
+
+
+async def test_switch_load_does_not_turn_on_when_numeric_load_absorbed_surplus(hass):
+    """Switch load must not activate when numeric load already consumed all surplus."""
+    entry = _make_entry(kp=1.0, deadband_w=0.0)
+    entry.add_to_hass(hass)
+
+    _set_state(hass, "sensor.grid_import", 0)
+    _set_state(hass, "sensor.grid_export", 2000)  # 2000 W surplus
+    hass.states.async_set("number.ev", "0")
+    hass.states.async_set("switch.boiler", "off")
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    # EV charger: can absorb up to 16 A × 230 W = 3680 W
+    # Boiler: needs 1000 W to turn on
+    coordinator.loads = [
+        _numeric_load(
+            "EV",
+            "number.ev",
+            setpoint_min=0,
+            setpoint_max=16,
+            w_per_unit=230.0,
+            priority=1,
+        ),
+        _switch_load(
+            "Boiler", "switch.boiler", power_w=1000.0, priority=2, switch_debounce_s=0
+        ),
+    ]
+
+    boiler_calls: list = []
+
+    async def mock_switch(entity_id, state):
+        boiler_calls.append(state)
+
+    with (
+        patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()),
+        patch.object(
+            coordinator._actuators, "write_switch_entity", side_effect=mock_switch
+        ),
+    ):
+        result = await coordinator._async_update_data()
+
+    assert result.status == STATUS_ACTIVE
+    # EV absorbed the full 2000 W surplus — boiler should NOT turn on
+    assert not boiler_calls, (
+        "Boiler should not activate when EV already absorbed all surplus"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Full control cycle integration
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from .array import ArrayConfig
 from .battery import BatteryConfig
@@ -40,8 +41,7 @@ class ActuatorManager:
         """Write on/off command to a switch or input_boolean entity."""
         state = self._hass.states.get(entity_id)
         if state is None or state.state in ("unavailable", "unknown"):
-            _LOGGER.debug("Skipping write to %s: unavailable", entity_id)
-            return
+            raise HomeAssistantError(f"Entity {entity_id} is unavailable")
         service = "turn_on" if turn_on else "turn_off"
         entity_domain = entity_id.split(".", 1)[0]
         await self._hass.services.async_call(

@@ -125,7 +125,77 @@
         }
       },
       "error": {
-        "duplicate_name": "Deze batterijnaam is al in gebruik."
+        "duplicate_name": "Deze batterijnaam is al in gebruik.",
+        "name_required": "Batterijnaam mag niet leeg zijn."
+      }
+    },
+    "load": {
+      "initiate_flow": {
+        "user": "Regelbare belasting toevoegen"
+      },
+      "entry_type": "Regelbare belasting",
+      "step": {
+        "user": {
+          "title": "Regelbare belasting toevoegen",
+          "description": "Kies een naam en type voor deze belasting.",
+          "data": {
+            "load_name": "Naam belasting (bijv. Auto-oplader, Boiler)",
+            "load_type": "Belastingtype"
+          }
+        },
+        "reconfigure": {
+          "title": "Regelbare belasting configureren",
+          "description": "Naam en type bijwerken.",
+          "data": {
+            "load_name": "Naam belasting",
+            "load_type": "Belastingtype"
+          }
+        },
+        "numeric_params": {
+          "title": "Numerieke belastingparameters",
+          "description": "Configureer de setpoint-entiteit en vermogenskarakteristieken.",
+          "data": {
+            "setpoint_entity": "Setpoint-entiteit",
+            "setpoint_min": "Minimale setpointwaarde",
+            "setpoint_max": "Maximale setpointwaarde",
+            "w_per_unit": "Watt per eenheid (W/eenheid)",
+            "absolute_min_w": "Minimaal actief vermogen (W, optioneel)",
+            "settling_time_s": "Instelttijd (s)",
+            "power_sensor_entity": "Vermogensensor (optioneel)",
+            "load_priority": "Prioriteit"
+          },
+          "data_description": {
+            "setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het laadvermogen aan te passen.",
+            "setpoint_min": "Laagst toegestane setpointwaarde (doorgaans 0 = uit).",
+            "setpoint_max": "Hoogst toegestane setpointwaarde.",
+            "w_per_unit": "Vermogenswijziging per setpointeenheid (bijv. 230 W/A voor een 1-fase EV-lader).",
+            "absolute_min_w": "Als ingesteld, moet de belasting volledig uit zijn of op of boven dit vermogen. EV-laders die minimaal 6 A (1380 W) nodig hebben bij gebruik, moeten dit instellen. Laat op 0 voor uitgeschakeld.",
+            "settling_time_s": "Seconden wachten na een setpointwijziging voordat opnieuw bijgestuurd wordt.",
+            "power_sensor_entity": "Optionele sensor die het werkelijke belastingvermogen meet voor monitoring.",
+            "load_priority": "Lagere waarde = hogere prioriteit. De hoogst-prioritaire belasting absorbeert overschot als eerste en wordt het laatste verminderd."
+          }
+        },
+        "switch_params": {
+          "title": "Schakelbelastingparameters",
+          "description": "Stel het vaste vermogen en de debouncetijd in.",
+          "data": {
+            "setpoint_entity": "Schakelaarentiteit",
+            "load_power_w": "Vast vermogen (W)",
+            "switch_debounce_s": "Debouncetijd (s)",
+            "load_priority": "Prioriteit"
+          },
+          "data_description": {
+            "setpoint_entity": "De switch- of input_boolean-entiteit om te schakelen.",
+            "load_power_w": "Vermogensverbruik wanneer de belasting aan is. Wordt gebruikt om te bepalen of er voldoende overschot is om aan te zetten.",
+            "switch_debounce_s": "Minimale seconden tussen schakelacties.",
+            "load_priority": "Lagere waarde = hogere prioriteit."
+          }
+        }
+      },
+      "error": {
+        "min_gte_max": "Minimale setpoint moet kleiner zijn dan maximale.",
+        "duplicate_name": "Deze belastingsnaam is al in gebruik.",
+        "name_required": "Naam belasting mag niet leeg zijn."
       }
     }
   },
@@ -173,6 +243,9 @@
       },
       "battery_setpoint": {
         "name": "Setpoint"
+      },
+      "load_setpoint": {
+        "name": "Setpoint"
       }
     },
     "binary_sensor": {
@@ -205,6 +278,12 @@
         "cautious": "Voorzichtig — langzame, stabiele reactie",
         "normal": "Normaal — gebalanceerd (aanbevolen)",
         "fast": "Snel — snelle reactie, kan oscilleren"
+      }
+    },
+    "load_type": {
+      "options": {
+        "numeric": "Numeriek (variabel setpoint)",
+        "switch": "Schakelaar (vast vermogen aan/uit)"
       }
     }
   },

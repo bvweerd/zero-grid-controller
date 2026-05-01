@@ -125,7 +125,77 @@
         }
       },
       "error": {
-        "duplicate_name": "This battery name is already in use."
+        "duplicate_name": "This battery name is already in use.",
+        "name_required": "Battery name cannot be empty."
+      }
+    },
+    "load": {
+      "initiate_flow": {
+        "user": "Add controllable load"
+      },
+      "entry_type": "Controllable Load",
+      "step": {
+        "user": {
+          "title": "Add controllable load",
+          "description": "Choose a name and type for this load.",
+          "data": {
+            "load_name": "Load name (e.g. EV Charger, Boiler)",
+            "load_type": "Load type"
+          }
+        },
+        "reconfigure": {
+          "title": "Configure controllable load",
+          "description": "Update name and type for this load.",
+          "data": {
+            "load_name": "Load name",
+            "load_type": "Load type"
+          }
+        },
+        "numeric_params": {
+          "title": "Numeric load parameters",
+          "description": "Configure the setpoint entity and power characteristics.",
+          "data": {
+            "setpoint_entity": "Setpoint entity",
+            "setpoint_min": "Minimum setpoint value",
+            "setpoint_max": "Maximum setpoint value",
+            "w_per_unit": "Watts per unit (W/unit)",
+            "absolute_min_w": "Minimum active power (W, optional)",
+            "settling_time_s": "Settling time (s)",
+            "power_sensor_entity": "Power sensor (optional)",
+            "load_priority": "Priority"
+          },
+          "data_description": {
+            "setpoint_entity": "The number entity the controller writes to adjust load power.",
+            "setpoint_min": "Lowest allowed setpoint value (typically 0 = off).",
+            "setpoint_max": "Highest allowed setpoint value.",
+            "w_per_unit": "Power change per unit step (e.g. 230 W/A for a single-phase EV charger).",
+            "absolute_min_w": "If set, the load must be fully off or at or above this power. EV chargers that require at least 6 A (1380 W) when on should use this. Leave at 0 to disable.",
+            "settling_time_s": "Seconds to wait after a setpoint change before adjusting again.",
+            "power_sensor_entity": "Optional sensor measuring actual load power for monitoring.",
+            "load_priority": "Lower number = higher priority. The highest-priority load absorbs surplus first and is the last to be reduced."
+          }
+        },
+        "switch_params": {
+          "title": "Switch load parameters",
+          "description": "Configure the fixed power and debounce time.",
+          "data": {
+            "setpoint_entity": "Switch entity",
+            "load_power_w": "Fixed power (W)",
+            "switch_debounce_s": "Debounce time (s)",
+            "load_priority": "Priority"
+          },
+          "data_description": {
+            "setpoint_entity": "The switch or input_boolean entity to toggle.",
+            "load_power_w": "Power consumption when the load is on. Used to decide when there is enough surplus to turn it on.",
+            "switch_debounce_s": "Minimum seconds between switching actions.",
+            "load_priority": "Lower number = higher priority."
+          }
+        }
+      },
+      "error": {
+        "min_gte_max": "Minimum setpoint must be less than maximum.",
+        "duplicate_name": "This load name is already in use.",
+        "name_required": "Load name cannot be empty."
       }
     }
   },
@@ -173,6 +243,9 @@
       },
       "battery_setpoint": {
         "name": "Setpoint"
+      },
+      "load_setpoint": {
+        "name": "Setpoint"
       }
     },
     "binary_sensor": {
@@ -205,6 +278,12 @@
         "cautious": "Cautious — slow, stable response",
         "normal": "Normal — balanced (recommended)",
         "fast": "Fast — quick, may oscillate"
+      }
+    },
+    "load_type": {
+      "options": {
+        "numeric": "Numeric (variable setpoint)",
+        "switch": "Switch (fixed power on/off)"
       }
     }
   },

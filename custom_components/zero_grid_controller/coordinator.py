@@ -336,6 +336,20 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         #     On export: loads absorb surplus first (greedy by priority),
         #     remainder goes to array curtailment.
         #     On import: arrays open first (proportional), remainder reduces loads.
+        #
+        # Snapshot numeric-load setpoints before distribution so we can compute
+        # actual watts absorbed and feed that back into the residual for switch
+        # hysteresis (switch loads must see the surplus that is left after
+        # numeric loads have been commanded, not the raw pre-correction surplus).
+        _load_sp_before = {
+            ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
+            for ld in self.loads
+            if not ld.is_switch
+        }
+        _load_w_per_unit = {
+            ld.name: ld.w_per_unit for ld in self.loads if not ld.is_switch
+        }
+
         if pid_output < 0:
             # Exporting surplus → increase loads, then curtail arrays
             remaining = await self._distribute_to_numeric_loads(pid_output, now)
@@ -345,9 +359,20 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             remaining = await self._distribute_to_numeric_arrays(pid_output, now)
             await self._distribute_to_numeric_loads(remaining, now)
 
+        # Actual watts absorbed by numeric loads in this cycle (positive = more
+        # consumption, negative = less). Adding this to residual gives the
+        # expected grid balance after the load commands take effect.
+        load_absorbed_w = sum(
+            (self._current_load_setpoints.get(name, before) - before)
+            * _load_w_per_unit[name]
+            for name, before in _load_sp_before.items()
+        )
+
         # 7c. Switch loads: on when surplus ≥ power_w, off when importing.
         #     Feedforward updates residual for subsequent switch decisions.
-        residual = await self._apply_load_switch_hysteresis(residual, now)
+        residual = await self._apply_load_switch_hysteresis(
+            residual + load_absorbed_w, now
+        )
 
         # 7d. Switch arrays: hysteresis on (possibly updated) residual
         await self._apply_switch_hysteresis(residual, now)
