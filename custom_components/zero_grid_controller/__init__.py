@@ -24,6 +24,7 @@ from .const import (
     BATTERY_SUBENTRY_TYPE,
     CONF_NAME,
     DOMAIN,
+    LOAD_SUBENTRY_TYPE,
     PLATFORMS,
     SERVICE_RECALIBRATE,
     SERVICE_RESET_PID,
@@ -47,6 +48,7 @@ class ZGCData:
     device: DeviceInfo
     array_devices: dict[str, DeviceInfo] = field(default_factory=dict)
     battery_devices: dict[str, DeviceInfo] = field(default_factory=dict)
+    load_devices: dict[str, DeviceInfo] = field(default_factory=dict)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -68,6 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     array_devices: dict[str, DeviceInfo] = {}
     battery_devices: dict[str, DeviceInfo] = {}
+    load_devices: dict[str, DeviceInfo] = {}
 
     for subentry in entry.subentries.values():
         if subentry.subentry_type == ARRAY_SUBENTRY_TYPE:
@@ -88,12 +91,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 model="Battery",
                 via_device=(DOMAIN, entry.entry_id),
             )
+        elif subentry.subentry_type == LOAD_SUBENTRY_TYPE:
+            load_name = subentry.data.get("load_name", subentry.title)
+            load_devices[subentry.subentry_id] = DeviceInfo(
+                identifiers={(DOMAIN, subentry.subentry_id)},
+                name=load_name,
+                manufacturer="bvweerd",
+                model="Controllable Load",
+                via_device=(DOMAIN, entry.entry_id),
+            )
 
     entry.runtime_data = ZGCData(
         coordinator=coordinator,
         device=main_device,
         array_devices=array_devices,
         battery_devices=battery_devices,
+        load_devices=load_devices,
     )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -154,8 +167,10 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     # to be updated, which requires a full platform reload.  For plain options
     # changes a lightweight coordinator reload is sufficient.
     current_ids = frozenset(entry.subentries)
-    known_ids = frozenset(entry.runtime_data.array_devices) | frozenset(
-        entry.runtime_data.battery_devices
+    known_ids = (
+        frozenset(entry.runtime_data.array_devices)
+        | frozenset(entry.runtime_data.battery_devices)
+        | frozenset(entry.runtime_data.load_devices)
     )
     if current_ids != known_ids:
         await hass.config_entries.async_reload(entry.entry_id)

@@ -25,6 +25,7 @@
       arrayCount: arrays.length,
       uncalibratedCount: uncalibrated.length,
       batteryCount: toArray(data.batteries).length,
+      loadCount: toArray(data.loads).length,
     };
   }
 
@@ -66,6 +67,21 @@
       });
     }
 
+    const loads = toArray(data.loads);
+    const loadSetpoints = data.load_setpoints || {};
+    loads.forEach((l) => {
+      if (l.load_type === 'switch') return;
+      const sp = loadSetpoints[l.name];
+      if (sp == null) return;
+      if (l.absolute_min_w != null && sp > 0 && sp * (l.w_per_unit || 1) < l.absolute_min_w) {
+        tips.push({
+          level: 'warn',
+          title: `Load "${l.name}" in forbidden zone`,
+          body: `Setpoint ${sp} is above off but below the absolute minimum of ${l.absolute_min_w} W. Check snap-to-min configuration.`,
+        });
+      }
+    });
+
     if (!tips.length) {
       tips.push({
         level: 'ok',
@@ -101,6 +117,8 @@
     document.getElementById('summary-pid').textContent =
       summary.pidOutputW == null ? '—' : `${summary.pidOutputW.toFixed(1)} W`;
     document.getElementById('summary-arrays').textContent = String(summary.arrayCount);
+    const loadsEl = document.getElementById('summary-loads');
+    if (loadsEl) loadsEl.textContent = String(summary.loadCount);
 
     const tipsContainer = document.getElementById('tips');
     tipsContainer.innerHTML = '';
@@ -164,6 +182,33 @@
         <td>${sp == null ? '—' : `${sp} W`}</td>`;
       batteriesTable.appendChild(row);
     });
+
+    const loadsTable = document.getElementById('loads-table');
+    if (loadsTable) {
+      loadsTable.innerHTML = '';
+      toArray(data.loads).forEach((l) => {
+        const sp = (data.load_setpoints || {})[l.name];
+        const row = document.createElement('tr');
+        if (l.load_type === 'switch') {
+          row.innerHTML = `
+            <td>${l.name}</td>
+            <td>switch</td>
+            <td>${l.power_w != null ? `${l.power_w} W` : '—'}</td>
+            <td>—</td>
+            <td>${sp == null ? '—' : (sp > 0 ? 'on' : 'off')}</td>
+            <td>${l.priority}</td>`;
+        } else {
+          row.innerHTML = `
+            <td>${l.name}</td>
+            <td>numeric</td>
+            <td>${l.w_per_unit} W/unit</td>
+            <td>${l.absolute_min_w != null ? `${l.absolute_min_w} W` : '—'}</td>
+            <td>${sp == null ? '—' : sp}</td>
+            <td>${l.priority}</td>`;
+        }
+        loadsTable.appendChild(row);
+      });
+    }
   }
 
   function parseAndRender(rawText) {

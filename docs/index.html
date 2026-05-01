@@ -53,6 +53,7 @@
       <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Grid filtered</div><div id="summary-grid" class="text-2xl font-black mt-1">—</div></div>
       <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">PID output</div><div id="summary-pid" class="text-2xl font-black mt-1">—</div></div>
       <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Arrays</div><div id="summary-arrays" class="text-2xl font-black mt-1">—</div></div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-xs uppercase tracking-wide text-slate-500">Loads</div><div id="summary-loads" class="text-2xl font-black mt-1">—</div></div>
     </div>
 
     <div class="grid gap-4 lg:grid-cols-3">
@@ -79,6 +80,14 @@
       <table>
         <thead><tr><th>Name</th><th>Max charge</th><th>Max discharge</th><th>Current setpoint</th></tr></thead>
         <tbody id="batteries-table"></tbody>
+      </table>
+    </div>
+
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 overflow-auto">
+      <h2 class="font-bold text-sm uppercase tracking-wide text-slate-500 mb-3">Controllable Loads</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Power / W per unit</th><th>Min active (W)</th><th>Setpoint</th><th>Priority</th></tr></thead>
+        <tbody id="loads-table"></tbody>
       </table>
     </div>
   </section>

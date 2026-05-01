@@ -36,6 +36,21 @@ class ActuatorManager:
             blocking=True,
         )
 
+    async def write_switch_entity(self, entity_id: str, turn_on: bool) -> None:
+        """Write on/off command to a switch or input_boolean entity."""
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            _LOGGER.debug("Skipping write to %s: unavailable", entity_id)
+            return
+        service = "turn_on" if turn_on else "turn_off"
+        entity_domain = entity_id.split(".", 1)[0]
+        await self._hass.services.async_call(
+            entity_domain,
+            service,
+            {ATTR_ENTITY_ID: entity_id},
+            blocking=True,
+        )
+
     async def write_setpoint(self, array: ArrayConfig, value: float) -> None:
         """Write a setpoint to the configured inverter entity."""
         if array.output_type == OUTPUT_TYPE_SWITCH:

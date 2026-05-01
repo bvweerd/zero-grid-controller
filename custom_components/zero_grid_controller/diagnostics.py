@@ -55,6 +55,21 @@ async def async_get_config_entry_diagnostics(
             }
             for b in coordinator.batteries
         ],
+        "loads": [
+            {
+                "name": ld.name,
+                "load_type": ld.load_type,
+                "priority": ld.priority,
+                "setpoint_min": ld.setpoint_min,
+                "setpoint_max": ld.setpoint_max,
+                "w_per_unit": ld.w_per_unit,
+                "absolute_min_w": ld.absolute_min_w,
+                "power_w": ld.power_w if ld.is_switch else None,
+                "power_sensor_entity": ld.power_sensor_entity,
+            }
+            for ld in coordinator.loads
+        ],
+        "load_setpoints": dict(result.load_setpoints) if result else {},
         "config": {
             "deadband_w": coordinator._deadband_w,
             "ewm_alpha": coordinator._ewm_alpha,

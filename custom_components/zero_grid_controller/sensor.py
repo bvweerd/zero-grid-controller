@@ -16,7 +16,13 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ARRAY_SUBENTRY_TYPE, BATTERY_SUBENTRY_TYPE, OUTPUT_TYPE_SWITCH
+from .const import (
+    ARRAY_SUBENTRY_TYPE,
+    BATTERY_SUBENTRY_TYPE,
+    LOAD_SUBENTRY_TYPE,
+    LOAD_TYPE_SWITCH,
+    OUTPUT_TYPE_SWITCH,
+)
 from .coordinator import ZeroGridCoordinator, ZGCResult
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +40,7 @@ async def async_setup_entry(
     main_device: DeviceInfo = entry.runtime_data.device
     array_devices: dict[str, DeviceInfo] = entry.runtime_data.array_devices
     battery_devices: dict[str, DeviceInfo] = entry.runtime_data.battery_devices
+    load_devices: dict[str, DeviceInfo] = entry.runtime_data.load_devices
 
     async_add_entities(
         [
@@ -69,6 +76,21 @@ async def async_setup_entry(
                 [
                     ZGCBatterySetpointSensor(
                         coordinator, entry, device, subentry.subentry_id, battery_name
+                    ),
+                ],
+                config_subentry_id=subentry.subentry_id,
+            )
+        elif subentry.subentry_type == LOAD_SUBENTRY_TYPE:
+            if subentry.data.get("load_type") == LOAD_TYPE_SWITCH:
+                continue  # switch loads expose their state via the switch entity itself
+            load_name = subentry.data.get("load_name", subentry.title)
+            device = load_devices.get(subentry.subentry_id)
+            if device is None:
+                continue
+            async_add_entities(
+                [
+                    ZGCLoadSetpointSensor(
+                        coordinator, entry, device, subentry.subentry_id, load_name
                     ),
                 ],
                 config_subentry_id=subentry.subentry_id,
@@ -245,3 +267,35 @@ class ZGCBatterySetpointSensor(ZGCSensorBase):
             return None
         sp = result.battery_setpoints.get(self._battery_name)
         return round(sp, 1) if sp is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Per-load sensors
+# ---------------------------------------------------------------------------
+
+
+class ZGCLoadSetpointSensor(ZGCSensorBase):
+    """Current setpoint for a numeric controllable load."""
+
+    _attr_translation_key = "load_setpoint"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: ZeroGridCoordinator,
+        entry: ConfigEntry,
+        device: DeviceInfo,
+        subentry_id: str,
+        load_name: str,
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._load_name = load_name
+        self._attr_unique_id = f"{entry.entry_id}_{subentry_id}_load_setpoint"
+
+    @property
+    def native_value(self) -> float | None:
+        result: ZGCResult | None = self.coordinator.data
+        if result is None:
+            return None
+        sp = result.load_setpoints.get(self._load_name)
+        return round(sp, 2) if sp is not None else None

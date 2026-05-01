@@ -184,6 +184,7 @@ async def test_update_listener_reloads_or_refreshes_runtime(hass):
         coordinator=MagicMock(),
         array_devices={"array-1": object()},
         battery_devices={"battery-1": object()},
+        load_devices={},
     )
     entry.runtime_data = runtime_data
     await _async_update_listener(hass, entry)
@@ -207,6 +208,7 @@ async def test_update_listener_full_reload_on_subentry_change(hass):
         coordinator=MagicMock(),
         array_devices={},  # missing array-1 and battery-1
         battery_devices={},
+        load_devices={},
     )
     entry.runtime_data = runtime_data
     with patch.object(

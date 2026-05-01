@@ -6,6 +6,7 @@ DOMAIN = "zero_grid_controller"
 
 ARRAY_SUBENTRY_TYPE = "array"
 BATTERY_SUBENTRY_TYPE = "battery"
+LOAD_SUBENTRY_TYPE = "load"
 
 # Config keys — main entry
 CONF_NAME = "name"
@@ -39,6 +40,17 @@ CONF_SWITCH_ON_THRESHOLD_W = "switch_on_threshold_w"
 CONF_SWITCH_OFF_THRESHOLD_W = "switch_off_threshold_w"
 CONF_SWITCH_DEBOUNCE_S = "switch_debounce_s"
 
+# Load subentry config keys
+CONF_LOAD_NAME = "load_name"
+CONF_LOAD_TYPE = "load_type"
+CONF_LOAD_POWER_W = "load_power_w"
+CONF_LOAD_ABSOLUTE_MIN_W = "load_absolute_min_w"
+CONF_LOAD_PRIORITY = "load_priority"
+
+# Load types
+LOAD_TYPE_NUMERIC = "numeric"
+LOAD_TYPE_SWITCH = "switch"
+
 # Battery subentry config keys
 CONF_BATTERY_SENSOR = "battery_sensor"
 CONF_BATTERY_MAX_CHARGE_W = "battery_max_charge_w"
@@ -62,6 +74,8 @@ DEFAULT_SWITCH_DEBOUNCE_S = 30
 DEFAULT_BATTERY_MAX_CHARGE_W = 5000.0
 DEFAULT_BATTERY_MAX_DISCHARGE_W = 5000.0
 DEFAULT_AGGRESSIVENESS = "normal"
+DEFAULT_LOAD_PRIORITY = 50
+DEFAULT_LOAD_DEBOUNCE_S = 30
 
 # Calibration constants
 CALIB_MAX_GRID_W = 3000.0  # Abort if |grid_w| exceeds this

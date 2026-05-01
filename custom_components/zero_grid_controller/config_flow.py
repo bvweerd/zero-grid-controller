@@ -25,12 +25,18 @@ from .const import (
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
+    CONF_LOAD_ABSOLUTE_MIN_W,
+    CONF_LOAD_NAME,
+    CONF_LOAD_POWER_W,
+    CONF_LOAD_PRIORITY,
+    CONF_LOAD_TYPE,
     CONF_NAME,
     CONF_OUTPUT_TYPE,
     CONF_POWER_SENSOR_ENTITY,
     CONF_SETPOINT_ENTITY,
     CONF_SETPOINT_MAX,
     CONF_SETPOINT_MIN,
+    CONF_SETTLING_TIME_S,
     CONF_SWITCH_DEBOUNCE_S,
     CONF_SWITCH_OFF_THRESHOLD_W,
     CONF_SWITCH_ON_THRESHOLD_W,
@@ -40,13 +46,19 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_W,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
+    DEFAULT_LOAD_DEBOUNCE_S,
+    DEFAULT_LOAD_PRIORITY,
     DEFAULT_SETPOINT_MAX,
     DEFAULT_SETPOINT_MIN,
+    DEFAULT_SETTLING_TIME_S,
     DEFAULT_SWITCH_DEBOUNCE_S,
     DEFAULT_SWITCH_OFF_THRESHOLD_W,
     DEFAULT_SWITCH_ON_THRESHOLD_W,
     DEFAULT_W_PER_UNIT,
     DOMAIN,
+    LOAD_SUBENTRY_TYPE,
+    LOAD_TYPE_NUMERIC,
+    LOAD_TYPE_SWITCH,
     OUTPUT_TYPE_PERCENT,
     OUTPUT_TYPE_SWITCH,
     OUTPUT_TYPE_WATT,
@@ -439,6 +451,246 @@ class BatterySubEntryFlow(config_entries.ConfigSubentryFlow):
 
 
 # ---------------------------------------------------------------------------
+# Load subentry flow
+# ---------------------------------------------------------------------------
+
+
+def _load_type_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(CONF_LOAD_NAME, default=defaults.get(CONF_LOAD_NAME, "")): str,
+            vol.Required(
+                CONF_LOAD_TYPE,
+                default=defaults.get(CONF_LOAD_TYPE, LOAD_TYPE_NUMERIC),
+            ): selector(
+                {
+                    "select": {
+                        "options": [LOAD_TYPE_NUMERIC, LOAD_TYPE_SWITCH],
+                        "translation_key": "load_type",
+                    }
+                }
+            ),
+        }
+    )
+
+
+def _load_numeric_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_SETPOINT_ENTITY,
+                default=defaults.get(CONF_SETPOINT_ENTITY, ""),
+            ): selector({"entity": {"domain": ["number", "input_number"]}}),
+            vol.Required(
+                CONF_SETPOINT_MIN,
+                default=defaults.get(CONF_SETPOINT_MIN, DEFAULT_SETPOINT_MIN),
+            ): selector({"number": {"min": 0, "max": 10000, "step": 1}}),
+            vol.Required(
+                CONF_SETPOINT_MAX,
+                default=defaults.get(CONF_SETPOINT_MAX, DEFAULT_SETPOINT_MAX),
+            ): selector({"number": {"min": 1, "max": 10000, "step": 1}}),
+            vol.Required(
+                CONF_W_PER_UNIT,
+                default=defaults.get(CONF_W_PER_UNIT, DEFAULT_W_PER_UNIT),
+            ): selector(
+                {
+                    "number": {
+                        "min": 1,
+                        "max": 100000,
+                        "step": 1,
+                        "unit_of_measurement": "W/unit",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_LOAD_ABSOLUTE_MIN_W,
+                default=defaults.get(CONF_LOAD_ABSOLUTE_MIN_W, 0),
+            ): selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 100000,
+                        "step": 10,
+                        "unit_of_measurement": "W",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_SETTLING_TIME_S,
+                default=defaults.get(CONF_SETTLING_TIME_S, DEFAULT_SETTLING_TIME_S),
+            ): selector(
+                {
+                    "number": {
+                        "min": 5,
+                        "max": 300,
+                        "step": 5,
+                        "unit_of_measurement": "s",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_POWER_SENSOR_ENTITY,
+                default=defaults.get(CONF_POWER_SENSOR_ENTITY, ""),
+            ): _POWER_SENSOR_SINGLE,
+            vol.Optional(
+                CONF_LOAD_PRIORITY,
+                default=defaults.get(CONF_LOAD_PRIORITY, DEFAULT_LOAD_PRIORITY),
+            ): selector({"number": {"min": 1, "max": 100, "step": 1}}),
+        }
+    )
+
+
+def _load_switch_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_SETPOINT_ENTITY,
+                default=defaults.get(CONF_SETPOINT_ENTITY, ""),
+            ): selector({"entity": {"domain": ["switch", "input_boolean"]}}),
+            vol.Required(
+                CONF_LOAD_POWER_W,
+                default=defaults.get(CONF_LOAD_POWER_W, 0),
+            ): selector(
+                {
+                    "number": {
+                        "min": 1,
+                        "max": 100000,
+                        "step": 10,
+                        "unit_of_measurement": "W",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_SWITCH_DEBOUNCE_S,
+                default=defaults.get(CONF_SWITCH_DEBOUNCE_S, DEFAULT_LOAD_DEBOUNCE_S),
+            ): selector(
+                {
+                    "number": {
+                        "min": 5,
+                        "max": 300,
+                        "step": 5,
+                        "unit_of_measurement": "s",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_LOAD_PRIORITY,
+                default=defaults.get(CONF_LOAD_PRIORITY, DEFAULT_LOAD_PRIORITY),
+            ): selector({"number": {"min": 1, "max": 100, "step": 1}}),
+        }
+    )
+
+
+class LoadSubEntryFlow(config_entries.ConfigSubentryFlow):
+    """Flow for adding or editing a controllable load subentry."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._draft: dict[str, Any] = {}
+        self._reconfigure_mode: bool = False
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 1 (add): name and load type."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = str(user_input.get(CONF_LOAD_NAME) or "").strip()
+            if not name:
+                errors[CONF_LOAD_NAME] = "name_required"
+            elif self._load_name_exists(name, current_id=None):
+                errors[CONF_LOAD_NAME] = "duplicate_name"
+            if not errors:
+                self._draft.update(user_input)
+                return await self._step_params()
+        return self.async_show_form(
+            step_id="user", data_schema=_load_type_schema(self._draft), errors=errors
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 1 (reconfigure): pre-filled name and load type."""
+        self._reconfigure_mode = True
+        subentry = self._get_reconfigure_subentry()
+        if not self._draft:
+            self._draft = dict(subentry.data)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = str(user_input.get(CONF_LOAD_NAME) or "").strip()
+            if not name:
+                errors[CONF_LOAD_NAME] = "name_required"
+            elif self._load_name_exists(name, current_id=subentry.subentry_id):
+                errors[CONF_LOAD_NAME] = "duplicate_name"
+            if not errors:
+                self._draft.update(user_input)
+                return await self._step_params()
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_load_type_schema(self._draft),
+            errors=errors,
+        )
+
+    async def async_step_numeric_params(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 2a: numeric load parameters."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if float(user_input[CONF_SETPOINT_MIN]) >= float(
+                user_input[CONF_SETPOINT_MAX]
+            ):
+                errors[CONF_SETPOINT_MIN] = "min_gte_max"
+            if not errors:
+                # Strip absolute_min_w if set to 0 (means "not used")
+                draft = dict(user_input)
+                if not draft.get(CONF_LOAD_ABSOLUTE_MIN_W):
+                    draft.pop(CONF_LOAD_ABSOLUTE_MIN_W, None)
+                self._draft.update(draft)
+                return self._finish()
+        return self.async_show_form(
+            step_id="numeric_params",
+            data_schema=_load_numeric_schema(self._draft),
+            errors=errors,
+        )
+
+    async def async_step_switch_params(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Step 2b: switch load parameters."""
+        if user_input is not None:
+            self._draft.update(user_input)
+            return self._finish()
+        return self.async_show_form(
+            step_id="switch_params",
+            data_schema=_load_switch_schema(self._draft),
+        )
+
+    def _load_name_exists(self, name: str, current_id: str | None) -> bool:
+        for se in self._get_entry().subentries.values():
+            if se.subentry_type != LOAD_SUBENTRY_TYPE:
+                continue
+            if se.subentry_id == current_id:
+                continue
+            if se.data.get(CONF_LOAD_NAME, "").lower() == name.lower():
+                return True
+        return False
+
+    async def _step_params(self) -> SubentryFlowResult:
+        if self._draft.get(CONF_LOAD_TYPE) == LOAD_TYPE_SWITCH:
+            return await self.async_step_switch_params()
+        return await self.async_step_numeric_params()
+
+    def _finish(self) -> SubentryFlowResult:
+        data = dict(self._draft)
+        if self._reconfigure_mode:
+            return self.async_update_and_abort(
+                self._get_entry(), self._get_reconfigure_subentry(), data=data
+            )
+        return self.async_create_entry(title=self._draft[CONF_LOAD_NAME], data=data)
+
+
+# ---------------------------------------------------------------------------
 # Main config flow (must come after subentry flow class definitions)
 # ---------------------------------------------------------------------------
 
@@ -457,6 +709,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return {
             ARRAY_SUBENTRY_TYPE: ArraySubEntryFlow,
             BATTERY_SUBENTRY_TYPE: BatterySubEntryFlow,
+            LOAD_SUBENTRY_TYPE: LoadSubEntryFlow,
         }
 
     async def async_step_user(

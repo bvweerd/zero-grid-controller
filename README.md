@@ -20,8 +20,8 @@ grid_w = consumption − PV_delivered − battery_net
 
 **Control priority:**
 
-1. When exporting (grid < 0): charge batteries first, then curtail PV arrays
-2. When importing (grid > 0): open PV arrays first, discharge batteries only when PV is already at maximum
+1. When exporting (grid < 0): charge batteries → increase controllable loads → curtail PV arrays
+2. When importing (grid > 0): open PV arrays → reduce controllable loads → discharge batteries (last resort)
 
 ---
 
@@ -82,6 +82,33 @@ After setup, go to the integration card and choose **Add entry → PV array**:
 - **Minimum on/off time**: debounce time in seconds before switching again.
 
 You can add multiple arrays. The controller distributes corrections proportionally to available headroom.
+
+### Adding a controllable load (subentry)
+
+Go to the integration card and choose **Add entry → Load**:
+
+**Step 1: type selection**
+- **Load name**: a friendly name (e.g. "EV Charger", "Boiler").
+- **Load type**: `numeric` (variable power) or `switch` (fixed power on/off).
+
+**Step 2a — numeric load:**
+- **Setpoint entity**: the `number.*` or `input_number.*` entity that sets the load level (e.g. charging current in amps).
+- **Setpoint min / max**: valid range for the entity.
+- **W per unit**: watts per setpoint unit (e.g. 230 W/A for a single-phase EV charger at 230 V).
+- **Minimum active power** (optional): minimum watts the load requires when on. If the controller would set it below this, it snaps to off instead. Use this for EV chargers that require at least 6 A (1380 W) when on.
+- **Settling time**: seconds to wait after a setpoint change before adjusting again.
+- **Power sensor** (optional): sensor measuring actual load power (for monitoring).
+- **Priority**: lower number = higher priority. The highest-priority load absorbs surplus first and is the last to be reduced.
+
+**Step 2b — switch load:**
+- **Switch entity**: the `switch.*` or `input_boolean.*` entity to toggle.
+- **Fixed power (W)**: power consumption when the load is on. The controller uses this to decide when there is enough surplus to turn it on.
+- **Debounce time**: minimum seconds between switching actions.
+- **Priority**: as above.
+
+**Switch load behaviour**: turns on when export surplus ≥ fixed power, turns off when any grid import occurs.
+
+You can add multiple loads. Higher-priority loads absorb surplus first and are the last to be reduced when the grid imports.
 
 ### Adding a battery (subentry)
 
@@ -229,7 +256,8 @@ Only when all numeric PV arrays are already at their maximum setpoint and the gr
 - **`coordinator.py`** — `DataUpdateCoordinator` subclass; runs every 5 s. Owns the 8-step control loop.
 - **`array.py`** — `ArrayConfig` dataclass; one per PV array subentry.
 - **`battery.py`** — `BatteryConfig` dataclass; one per battery subentry.
-- **`config_flow.py`** — Main flow + array subentry flow (numeric/switch) + battery subentry flow.
+- **`load.py`** — `LoadConfig` dataclass; one per controllable load subentry (numeric or switch).
+- **`config_flow.py`** — Main flow + array, battery, and load subentry flows.
 
 ---
 

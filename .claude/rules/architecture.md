@@ -13,10 +13,14 @@
 - `estimator.py` — Scalar Recursive Least Squares (RLS) estimator for online system gain identification
 - `calibrator.py` — Async step-response calibration routine (measures inverter gain and settling time)
 - `array.py` — `ArrayConfig` dataclass, one instance per PV array subentry
-- `config_flow.py` — 4-step setup wizard, options flow, and array subentry flow
+- `load.py` — `LoadConfig` dataclass, one instance per controllable load subentry (numeric or switch)
+- `config_flow.py` — 4-step setup wizard, options flow, array/battery/load subentry flows
 
 ## Sub-entry model
-The integration uses HA sub-entries (`sub_entries=true`). The main entry holds global config (grid sensor, PID params); each PV array is a subentry with its own device. Battery and optimizer mode are optional subentries.
+The integration uses HA sub-entries (`sub_entries=true`). The main entry holds global config (grid sensor, PID params). Three subentry types exist:
+- `array` — PV inverter (numeric percent/watt or switch)
+- `battery` — bidirectional battery storage
+- `load` — controllable load (numeric variable or switch with fixed power_w)
 
 ## External dependencies
 - `homeassistant` — all HA core APIs

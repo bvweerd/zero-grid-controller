@@ -48,10 +48,12 @@ from .const import (
     DEFAULT_KP,
     DEFAULT_OUTPUT_MAX_W,
     DOMAIN,
+    LOAD_SUBENTRY_TYPE,
     STATUS_ACTIVE,
     STATUS_DEADBAND,
     STATUS_DISABLED,
 )
+from .load import LoadConfig, load_config_from_subentry
 from .pid import PIDController
 from .repairs import dismiss_grid_sensor_unavailable, raise_grid_sensor_unavailable
 from .utils import clamp
@@ -71,6 +73,7 @@ class ZGCResult:
     status: str
     setpoints: dict[str, float] = field(default_factory=dict)
     battery_setpoints: dict[str, float] = field(default_factory=dict)
+    load_setpoints: dict[str, float] = field(default_factory=dict)
 
 
 class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
@@ -94,7 +97,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._filtered_w: float | None = None
         self._current_setpoints: dict[str, float] = {}
         self._current_battery_setpoints: dict[str, float] = {}
+        self._current_load_setpoints: dict[str, float] = {}
         self._settling_until: dict[str, float] = {}
+        self._load_settling_until: dict[str, float] = {}
         self._calibrator: ArrayCalibrator | None = None
         self._grid_sensor_unavailable: bool = False
 
@@ -133,6 +138,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
 
         self.arrays: list[ArrayConfig] = []
         self.batteries: list[BatteryConfig] = []
+        self.loads: list[LoadConfig] = []
 
         for subentry in entry.subentries.values():
             if subentry.subentry_type == ARRAY_SUBENTRY_TYPE:
@@ -142,6 +148,10 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             elif subentry.subentry_type == BATTERY_SUBENTRY_TYPE:
                 self.batteries.append(
                     battery_config_from_subentry(subentry.subentry_id, subentry.data)
+                )
+            elif subentry.subentry_type == LOAD_SUBENTRY_TYPE:
+                self.loads.append(
+                    load_config_from_subentry(subentry.subentry_id, subentry.data)
                 )
 
     # ------------------------------------------------------------------
@@ -217,6 +227,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             await self._actuators.enter_safe_state(
                 self.arrays, self.batteries, self._current_setpoints
             )
+            await self._enter_load_safe_state()
             return ZGCResult(
                 grid_raw_w=0.0,
                 grid_filtered_w=0.0,
@@ -246,6 +257,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 status=STATUS_DISABLED,
                 setpoints=dict(self._current_setpoints),
                 battery_setpoints=dict(self._current_battery_setpoints),
+                load_setpoints=dict(self._current_load_setpoints),
             )
 
         # 3. Enable entity check
@@ -254,12 +266,14 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             await self._actuators.enter_safe_state(
                 self.arrays, self.batteries, self._current_setpoints
             )
+            await self._enter_load_safe_state()
             return ZGCResult(
                 grid_raw_w=grid_raw,
                 grid_filtered_w=filtered,
                 pid_output_w=0.0,
                 status=STATUS_DISABLED,
                 setpoints=dict(self._current_setpoints),
+                load_setpoints=dict(self._current_load_setpoints),
             )
 
         # 4. Deadband check
@@ -272,6 +286,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 status=STATUS_DEADBAND,
                 setpoints=dict(self._current_setpoints),
                 battery_setpoints=dict(self._current_battery_setpoints),
+                load_setpoints=dict(self._current_load_setpoints),
             )
 
         # 5. Battery charge layer (export: grid < 0 → charge batteries)
@@ -311,14 +326,30 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         battery_cmd_w = sum(self._current_battery_setpoints.values())
         residual = filtered - battery_cmd_w
 
-        # 7a. Numeric arrays: PID on residual
+        # 7a. PID on residual
         # Negate: PID error = setpoint - (-residual) = residual
-        # → positive output when importing (open PV), negative when exporting (curtail PV)
+        # → positive output when importing (open PV / reduce load)
+        # → negative output when exporting (curtail PV / increase load)
         pid_output = self._pid.compute(-residual, dt)
 
-        await self._distribute_to_numeric_arrays(pid_output, now)
+        # 7b. Numeric correction — loads and arrays share the pid_output.
+        #     On export: loads absorb surplus first (greedy by priority),
+        #     remainder goes to array curtailment.
+        #     On import: arrays open first (proportional), remainder reduces loads.
+        if pid_output < 0:
+            # Exporting surplus → increase loads, then curtail arrays
+            remaining = await self._distribute_to_numeric_loads(pid_output, now)
+            await self._distribute_to_numeric_arrays(remaining, now)
+        else:
+            # Importing deficit → open arrays, then reduce loads
+            remaining = await self._distribute_to_numeric_arrays(pid_output, now)
+            await self._distribute_to_numeric_loads(remaining, now)
 
-        # 7b. Switch arrays: hysteresis on residual
+        # 7c. Switch loads: on when surplus ≥ power_w, off when importing.
+        #     Feedforward updates residual for subsequent switch decisions.
+        residual = await self._apply_load_switch_hysteresis(residual, now)
+
+        # 7d. Switch arrays: hysteresis on (possibly updated) residual
         await self._apply_switch_hysteresis(residual, now)
 
         # 8. Battery discharge layer (all numeric PV at max AND still importing)
@@ -355,6 +386,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             status=STATUS_ACTIVE,
             setpoints=dict(self._current_setpoints),
             battery_setpoints=dict(self._current_battery_setpoints),
+            load_setpoints=dict(self._current_load_setpoints),
         )
 
     # ------------------------------------------------------------------
@@ -403,15 +435,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         except ValueError:
             return None
 
-    async def _distribute_to_numeric_arrays(self, delta_w: float, now: float) -> None:
-        """Distribute PID output across numeric arrays by available headroom."""
+    async def _distribute_to_numeric_arrays(self, delta_w: float, now: float) -> float:
+        """Distribute PID output across numeric arrays by available headroom.
+
+        Returns the remaining unabsorbed delta_w (for passing on to loads).
+        """
         active = [
             a
             for a in self.arrays
             if not a.is_switch and now >= self._settling_until.get(a.name, 0.0)
         ]
         if not active or delta_w == 0:
-            return
+            return delta_w
 
         # Initialise setpoints from actual entity state on first encounter so
         # headroom is computed from the real position, not assumed setpoint_max.
@@ -440,8 +475,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         }
         total_headroom = sum(headrooms.values())
         if total_headroom <= 0:
-            return
+            return delta_w
 
+        total_absorbed_w = 0.0
         for array in active:
             if array.w_per_unit == 0:
                 continue
@@ -464,6 +500,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 continue
 
             await self._actuators.write_setpoint(array, new_sp)
+            total_absorbed_w += (new_sp - current) * array.w_per_unit
             self._current_setpoints[array.name] = new_sp
             settle_s = (
                 (array.settling_up_s or array.settling_time_s)
@@ -471,6 +508,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 else (array.settling_down_s or array.settling_time_s)
             )
             self._settling_until[array.name] = now + settle_s
+
+        return delta_w - total_absorbed_w
 
     def _can_open(self, array: ArrayConfig) -> bool:
         """Return True if the array may increase its setpoint.
@@ -487,6 +526,154 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             return True
         current_sp = self._current_setpoints.get(array.name, array.setpoint_max)
         return actual >= (current_sp - 1) * array.w_per_unit
+
+    async def _distribute_to_numeric_loads(self, delta_w: float, now: float) -> float:
+        """Distribute correction across numeric loads by priority (greedy).
+
+        delta_w < 0: exporting surplus → increase loads, highest priority first.
+        delta_w > 0: importing deficit → decrease loads, lowest priority first.
+
+        Returns remaining unabsorbed delta_w.
+        """
+        active = [
+            ld
+            for ld in self.loads
+            if not ld.is_switch and now >= self._load_settling_until.get(ld.name, 0.0)
+        ]
+        if not active or delta_w == 0:
+            return delta_w
+
+        # Initialise setpoints from actual entity state on first encounter
+        for load in active:
+            if load.name not in self._current_load_setpoints:
+                state = self.hass.states.get(load.setpoint_entity)
+                if state is not None and state.state not in ("unavailable", "unknown"):
+                    try:
+                        self._current_load_setpoints[load.name] = clamp(
+                            float(state.state), load.setpoint_min, load.setpoint_max
+                        )
+                    except ValueError:
+                        self._current_load_setpoints[load.name] = load.setpoint_min
+                else:
+                    self._current_load_setpoints[load.name] = load.setpoint_min
+
+        remaining = delta_w
+
+        if delta_w < 0:
+            # Exporting surplus → increase loads, highest priority (lowest number) first
+            ordered = sorted(active, key=lambda ld: ld.priority)
+            for load in ordered:
+                if remaining >= 0:
+                    break
+                current = self._current_load_setpoints[load.name]
+                available_w = load.headroom_increase_w(current)
+                if available_w <= 0:
+                    continue
+                take_w = min(available_w, -remaining)
+                delta_units = round(take_w / load.w_per_unit)
+                if delta_units == 0:
+                    continue
+                new_sp = clamp(
+                    current + delta_units, load.setpoint_min, load.setpoint_max
+                )
+                new_sp = load.snap_setpoint(new_sp, increasing=True)
+                if new_sp == current:
+                    continue
+                actual_w = (new_sp - current) * load.w_per_unit
+                try:
+                    await self._actuators.write_numeric_entity(
+                        load.setpoint_entity, new_sp
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to write setpoint for load %s", load.name)
+                    continue
+                self._current_load_setpoints[load.name] = new_sp
+                self._load_settling_until[load.name] = now + load.settling_time_s
+                remaining += actual_w  # remaining is negative; reduce magnitude
+        else:
+            # Importing deficit → decrease loads, lowest priority (highest number) first
+            ordered = sorted(active, key=lambda ld: -ld.priority)
+            for load in ordered:
+                if remaining <= 0:
+                    break
+                current = self._current_load_setpoints[load.name]
+                available_w = load.headroom_decrease_w(current)
+                if available_w <= 0:
+                    continue
+                take_w = min(available_w, remaining)
+                delta_units = round(take_w / load.w_per_unit)
+                if delta_units == 0:
+                    continue
+                new_sp = clamp(
+                    current - delta_units, load.setpoint_min, load.setpoint_max
+                )
+                new_sp = load.snap_setpoint(new_sp, increasing=False)
+                if new_sp == current:
+                    continue
+                actual_w = (current - new_sp) * load.w_per_unit
+                try:
+                    await self._actuators.write_numeric_entity(
+                        load.setpoint_entity, new_sp
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to write setpoint for load %s", load.name)
+                    continue
+                self._current_load_setpoints[load.name] = new_sp
+                self._load_settling_until[load.name] = now + load.settling_time_s
+                remaining -= actual_w
+
+        return remaining
+
+    async def _apply_load_switch_hysteresis(self, residual: float, now: float) -> float:
+        """Turn switch loads on/off based on residual power.
+
+        Returns updated residual with feedforward applied for each switch action,
+        so subsequent switch loads in the same cycle see the corrected value.
+        """
+        for load in sorted(self.loads, key=lambda ld: ld.priority):
+            if not load.is_switch:
+                continue
+            if now < self._load_settling_until.get(load.name, 0.0):
+                continue
+
+            # Initialise from actual entity state on first encounter
+            if load.name not in self._current_load_setpoints:
+                state = self.hass.states.get(load.setpoint_entity)
+                if state is not None and state.state not in ("unavailable", "unknown"):
+                    self._current_load_setpoints[load.name] = (
+                        1.0 if state.state == "on" else 0.0
+                    )
+                else:
+                    self._current_load_setpoints[load.name] = 0.0
+
+            is_on = self._current_load_setpoints[load.name] > 0.0
+
+            if not is_on and residual <= -load.power_w:
+                # Surplus ≥ power_w → turn on load to absorb
+                try:
+                    await self._actuators.write_switch_entity(
+                        load.setpoint_entity, True
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to turn on load %s", load.name)
+                    continue
+                self._current_load_setpoints[load.name] = 1.0
+                self._load_settling_until[load.name] = now + load.switch_debounce_s
+                residual += load.power_w  # feedforward: load absorbs power_w watts
+            elif is_on and residual >= 0:
+                # Grid importing → turn off load
+                try:
+                    await self._actuators.write_switch_entity(
+                        load.setpoint_entity, False
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to turn off load %s", load.name)
+                    continue
+                self._current_load_setpoints[load.name] = 0.0
+                self._load_settling_until[load.name] = now + load.switch_debounce_s
+                residual -= load.power_w  # feedforward: load releases power_w watts
+
+        return residual
 
     async def _apply_switch_hysteresis(self, residual: float, now: float) -> None:
         """Turn switch arrays on/off based on residual power."""
@@ -524,6 +711,23 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             await self._actuators.write_setpoint(array, new_sp)
             self._current_setpoints[array.name] = new_sp
             self._settling_until[array.name] = now + array.switch_debounce_s
+
+    async def _enter_load_safe_state(self) -> None:
+        """Move all loads to a neutral fail-safe state (minimum setpoint / off)."""
+        for load in self.loads:
+            try:
+                if load.is_switch:
+                    await self._actuators.write_switch_entity(
+                        load.setpoint_entity, False
+                    )
+                    self._current_load_setpoints[load.name] = 0.0
+                else:
+                    await self._actuators.write_numeric_entity(
+                        load.setpoint_entity, load.setpoint_min
+                    )
+                    self._current_load_setpoints[load.name] = load.setpoint_min
+            except Exception:
+                _LOGGER.exception("Failed to set load %s to safe state", load.name)
 
     async def _persist_calibration_results(
         self, results: list[CalibrationResult]
