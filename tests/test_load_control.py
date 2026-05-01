@@ -326,6 +326,346 @@ async def test_switch_load_debounce(hass):
 
 
 # ---------------------------------------------------------------------------
+# _distribute_to_numeric_loads edge cases
+# ---------------------------------------------------------------------------
+
+
+async def test_numeric_load_at_max_no_write_on_surplus(hass):
+    """Load already at setpoint_max: no write, full surplus returned."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(setpoint_min=0.0, setpoint_max=16.0, w_per_unit=230.0)
+    ]
+    coordinator._current_load_setpoints["EV"] = 16.0  # already at max
+    hass.states.async_set("number.ev", "16")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        remaining = await coordinator._distribute_to_numeric_loads(-1000.0, now=0.0)
+
+    mock_write.assert_not_awaited()
+    assert remaining == pytest.approx(-1000.0)
+
+
+async def test_numeric_load_at_min_no_write_on_import(hass):
+    """Load already at setpoint_min: no write, full deficit returned."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(setpoint_min=0.0, setpoint_max=16.0, w_per_unit=230.0)
+    ]
+    coordinator._current_load_setpoints["EV"] = 0.0  # already at min
+    hass.states.async_set("number.ev", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        remaining = await coordinator._distribute_to_numeric_loads(500.0, now=0.0)
+
+    mock_write.assert_not_awaited()
+    assert remaining == pytest.approx(500.0)
+
+
+async def test_numeric_load_settling_time_skipped(hass):
+    """Load within settling window is excluded from active set: no write."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_numeric_load(settling_time_s=30)]
+    coordinator._current_load_setpoints["EV"] = 0.0
+    coordinator._load_settling_until["EV"] = 100.0  # settling until t=100
+    hass.states.async_set("number.ev", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        remaining = await coordinator._distribute_to_numeric_loads(
+            -1000.0, now=50.0
+        )  # now < 100
+
+    mock_write.assert_not_awaited()
+    assert remaining == pytest.approx(-1000.0)
+
+
+async def test_numeric_load_tiny_surplus_rounds_to_zero_no_write(hass):
+    """Surplus smaller than one unit (rounds to 0 delta_units): no write."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(setpoint_min=0.0, setpoint_max=16.0, w_per_unit=230.0)
+    ]
+    coordinator._current_load_setpoints["EV"] = 0.0
+    hass.states.async_set("number.ev", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        # 100 W surplus, w_per_unit=230: round(100/230)=0 → skip
+        remaining = await coordinator._distribute_to_numeric_loads(-100.0, now=0.0)
+
+    mock_write.assert_not_awaited()
+    assert remaining == pytest.approx(-100.0)
+
+
+async def test_numeric_load_priority_cascade_first_saturated(hass):
+    """When priority-1 load is full, surplus spills to priority-2."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(
+            "EV",
+            "number.ev",
+            setpoint_min=0,
+            setpoint_max=10,
+            w_per_unit=230.0,
+            priority=1,
+        ),
+        _numeric_load(
+            "Pool",
+            "number.pool",
+            setpoint_min=0,
+            setpoint_max=10,
+            w_per_unit=500.0,
+            priority=2,
+        ),
+    ]
+    # EV already at max → headroom = 0
+    coordinator._current_load_setpoints["EV"] = 10.0
+    coordinator._current_load_setpoints["Pool"] = 0.0
+    hass.states.async_set("number.ev", "10")
+    hass.states.async_set("number.pool", "0")
+
+    write_calls: list[tuple[str, float]] = []
+
+    async def mock_write(entity_id, value):
+        write_calls.append((entity_id, value))
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", side_effect=mock_write
+    ):
+        await coordinator._distribute_to_numeric_loads(-2000.0, now=0.0)
+
+    ev_writes = [v for eid, v in write_calls if "ev" in eid]
+    pool_writes = [v for eid, v in write_calls if "pool" in eid]
+    assert not ev_writes, "EV is at max, should not be written"
+    assert pool_writes, "Pool (priority 2) should absorb surplus when EV is full"
+    assert pool_writes[0] > 0
+
+
+async def test_numeric_load_snap_up_over_absorbs(hass):
+    """Snap up to absolute_min_w can over-absorb surplus (remaining goes positive)."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    # absolute_min_w=1380 → ceil(1380/230)=6A minimum when on
+    coordinator.loads = [
+        _numeric_load(
+            w_per_unit=230.0, absolute_min_w=1380.0, setpoint_min=0.0, setpoint_max=16.0
+        )
+    ]
+    coordinator._current_load_setpoints["EV"] = 0.0
+    hass.states.async_set("number.ev", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        # -300 W surplus: would request 1-2A, snap up to 6A (1380W) → over-absorbs
+        remaining = await coordinator._distribute_to_numeric_loads(-300.0, now=0.0)
+
+    mock_write.assert_awaited()
+    written = mock_write.call_args[0][1]
+    assert written == 6.0  # snapped to minimum active setpoint
+    # remaining flips positive: EV absorbed 1380W but only 300W was requested
+    assert remaining > 0
+
+
+async def test_numeric_load_snap_down_over_releases(hass):
+    """Snap down to 0 can over-release deficit (remaining goes negative)."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    # EV at 4A (920W), import 300W → would go to 3A, but 3A < 6A min → snap to 0
+    coordinator.loads = [
+        _numeric_load(
+            w_per_unit=230.0, absolute_min_w=1380.0, setpoint_min=0.0, setpoint_max=16.0
+        )
+    ]
+    coordinator._current_load_setpoints["EV"] = 4.0
+    hass.states.async_set("number.ev", "4")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        remaining = await coordinator._distribute_to_numeric_loads(300.0, now=0.0)
+
+    mock_write.assert_awaited()
+    written = mock_write.call_args[0][1]
+    assert written == 0.0  # snapped to off
+    # remaining goes negative: released 920W but only 300W was needed
+    assert remaining < 0
+
+
+async def test_numeric_load_write_failure_setpoint_not_updated(hass):
+    """Write exception: setpoint in memory stays at previous value."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(setpoint_min=0.0, setpoint_max=16.0, w_per_unit=230.0)
+    ]
+    coordinator._current_load_setpoints["EV"] = 0.0
+    hass.states.async_set("number.ev", "0")
+
+    with patch.object(
+        coordinator._actuators,
+        "write_numeric_entity",
+        new=AsyncMock(side_effect=Exception("device offline")),
+    ):
+        # should not raise; setpoint must remain 0
+        remaining = await coordinator._distribute_to_numeric_loads(-1150.0, now=0.0)
+
+    assert coordinator._current_load_setpoints["EV"] == 0.0
+    # Remaining is unchanged: failed write means load absorbed nothing
+    assert remaining == pytest.approx(-1150.0)
+
+
+# ---------------------------------------------------------------------------
+# _apply_load_switch_hysteresis edge cases
+# ---------------------------------------------------------------------------
+
+
+async def test_switch_load_already_on_no_redundant_write_on_surplus(hass):
+    """Switch already on with surplus: no redundant write."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=0)]
+    coordinator._current_load_setpoints["Boiler"] = 1.0
+    hass.states.async_set("switch.boiler", "on")
+
+    with patch.object(
+        coordinator._actuators, "write_switch_entity", new=AsyncMock()
+    ) as mock_write:
+        await coordinator._apply_load_switch_hysteresis(-3000.0, now=0.0)
+
+    mock_write.assert_not_awaited()
+
+
+async def test_switch_load_already_off_no_write_on_import(hass):
+    """Switch already off while importing: no redundant write."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=0)]
+    coordinator._current_load_setpoints["Boiler"] = 0.0
+    hass.states.async_set("switch.boiler", "off")
+
+    with patch.object(
+        coordinator._actuators, "write_switch_entity", new=AsyncMock()
+    ) as mock_write:
+        await coordinator._apply_load_switch_hysteresis(500.0, now=0.0)
+
+    mock_write.assert_not_awaited()
+
+
+async def test_switch_load_lower_priority_turns_on_when_higher_cant(hass):
+    """Lower-priority load turns on when surplus is insufficient for higher-priority load."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _switch_load(
+            "Boiler", "switch.boiler", power_w=2000.0, priority=1, switch_debounce_s=0
+        ),
+        _switch_load(
+            "Pump", "switch.pump", power_w=1000.0, priority=2, switch_debounce_s=0
+        ),
+    ]
+    hass.states.async_set("switch.boiler", "off")
+    hass.states.async_set("switch.pump", "off")
+
+    boiler_calls: list[bool] = []
+    pump_calls: list[bool] = []
+
+    async def mock_write(entity_id, state):
+        if "boiler" in entity_id:
+            boiler_calls.append(state)
+        else:
+            pump_calls.append(state)
+
+    with patch.object(
+        coordinator._actuators, "write_switch_entity", side_effect=mock_write
+    ):
+        # -1500 W: enough for pump (1000W) but not boiler (2000W)
+        await coordinator._apply_load_switch_hysteresis(-1500.0, now=0.0)
+
+    assert not boiler_calls, "Boiler needs 2000W, only 1500W available"
+    assert pump_calls == [True], "Pump (1000W) should turn on with 1500W surplus"
+
+
+async def test_switch_load_debounce_after_turn_off(hass):
+    """Switch load respects debounce after turning off."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=30)]
+    coordinator._current_load_setpoints["Boiler"] = 1.0
+    hass.states.async_set("switch.boiler", "on")
+
+    with patch.object(
+        coordinator._actuators, "write_switch_entity", new=AsyncMock()
+    ) as mock_write:
+        # Turn off at t=0
+        await coordinator._apply_load_switch_hysteresis(500.0, now=0.0)
+        assert mock_write.await_count == 1
+        # Surplus returns within debounce window: should NOT turn on again
+        await coordinator._apply_load_switch_hysteresis(-3000.0, now=10.0)
+        assert mock_write.await_count == 1, (
+            "Should be blocked by debounce after turn-off"
+        )
+
+
+async def test_switch_load_write_failure_setpoint_not_updated(hass):
+    """Write exception on switch turn-on: setpoint stays at 0, no crash."""
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=0)]
+    hass.states.async_set("switch.boiler", "off")
+
+    with patch.object(
+        coordinator._actuators,
+        "write_switch_entity",
+        new=AsyncMock(side_effect=Exception("device offline")),
+    ):
+        residual = await coordinator._apply_load_switch_hysteresis(-3000.0, now=0.0)
+
+    # Setpoint must remain 0 (off): write failed, feedforward must not be applied
+    assert coordinator._current_load_setpoints.get("Boiler", 0.0) == 0.0
+    # Residual unchanged: load was not turned on
+    assert residual == pytest.approx(-3000.0)
+
+
+# ---------------------------------------------------------------------------
 # Full control cycle integration
 # ---------------------------------------------------------------------------
 
