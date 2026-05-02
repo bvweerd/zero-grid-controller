@@ -699,6 +699,7 @@ class ZeroGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Setup wizard for Zero Grid Controller."""
 
     VERSION = 1
+    MINOR_VERSION = 1
 
     @classmethod
     @callback

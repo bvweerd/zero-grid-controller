@@ -22,14 +22,17 @@ class ActuatorManager:
         self._hass = hass
 
     async def write_numeric_entity(self, entity_id: str, value: float) -> None:
-        """Write a value to a number or input_number entity."""
+        """Write a value to a number or input_number entity.
+
+        Raises HomeAssistantError when the entity is unavailable so callers
+        can choose whether to skip or propagate the failure.
+        """
         domain = entity_id.split(".", 1)[0]
         if domain not in {"number", "input_number"}:
             raise ValueError(f"Unsupported numeric entity domain for {entity_id}")
         state = self._hass.states.get(entity_id)
         if state is None or state.state in ("unavailable", "unknown"):
-            _LOGGER.debug("Skipping write to %s: unavailable", entity_id)
-            return
+            raise HomeAssistantError(f"Entity {entity_id} is unavailable")
         await self._hass.services.async_call(
             domain,
             "set_value",

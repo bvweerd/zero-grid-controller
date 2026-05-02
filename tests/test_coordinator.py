@@ -154,11 +154,11 @@ async def test_reload_config_preserves_pid_integral(hass):
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     # Force some integral accumulation
-    coordinator._pid.set_integral(42.0)
-    coordinator._filtered_w = 100.0
+    coordinator._engine.pid.set_integral(42.0)
+    coordinator._engine._filtered_w = 100.0
     coordinator.reload_config()
-    assert coordinator._pid.integral == pytest.approx(42.0)
-    assert coordinator._filtered_w == pytest.approx(100.0)
+    assert coordinator._engine.pid.integral == pytest.approx(42.0)
+    assert coordinator._engine._filtered_w == pytest.approx(100.0)
 
 
 async def test_start_calibration_returns_empty_when_already_running(hass):
@@ -219,7 +219,7 @@ async def test_update_data_does_not_write_while_calibration_running(hass):
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     coordinator._calibrator = MagicMock()
-    coordinator._current_setpoints = {"Solar": 30.0}
+    coordinator._engine._current_setpoints = {"Solar": 30.0}
 
     hass.states.async_set("sensor.grid_import", "1000")
     hass.states.async_set("sensor.grid_export", "0")
@@ -246,8 +246,8 @@ def test_read_sensor_safe_returns_none_for_invalid_state(hass):
     coordinator = ZeroGridCoordinator(hass, entry)
 
     hass.states.async_set("sensor.grid_import", "not-a-number")
-    assert coordinator._read_sensor_safe("sensor.grid_import") is None
-    assert coordinator._read_sensor_safe("sensor.missing") is None
+    assert coordinator.read_sensor_safe("sensor.grid_import") is None
+    assert coordinator.read_sensor_safe("sensor.missing") is None
 
 
 async def test_distribute_to_numeric_arrays_respects_headroom_and_settling(hass):
@@ -276,18 +276,22 @@ async def test_distribute_to_numeric_arrays_respects_headroom_and_settling(hass)
             settling_time_s=15,
         ),
     ]
-    coordinator._current_setpoints = {"A": 80.0, "B": 100.0}
-    coordinator._settling_until = {"B": 200.0}
+    coordinator._engine._current_setpoints = {"A": 80.0, "B": 100.0}
+    coordinator._engine._settling_until = {"B": 200.0}
 
     with patch.object(
         coordinator._actuators, "write_setpoint", new=AsyncMock()
     ) as mock_write:
-        await coordinator._distribute_to_numeric_arrays(50.0, now=100.0)
-        await coordinator._distribute_to_numeric_arrays(0.0, now=100.0)
+        await coordinator._engine._distribute_to_numeric_arrays(
+            50.0, 100.0, coordinator.arrays
+        )
+        await coordinator._engine._distribute_to_numeric_arrays(
+            0.0, 100.0, coordinator.arrays
+        )
 
     mock_write.assert_awaited_once()
-    assert coordinator._current_setpoints["A"] == 85.0
-    assert coordinator._settling_until["A"] == 115.0
+    assert coordinator._engine._current_setpoints["A"] == 85.0
+    assert coordinator._engine._settling_until["A"] == 115.0
 
 
 async def test_distribute_to_numeric_arrays_handles_curtailment_and_zero_headroom(hass):
@@ -306,16 +310,20 @@ async def test_distribute_to_numeric_arrays_handles_curtailment_and_zero_headroo
             settling_time_s=10,
         )
     ]
-    coordinator._current_setpoints = {"A": 20.0}
+    coordinator._engine._current_setpoints = {"A": 20.0}
 
     with patch.object(
         coordinator._actuators, "write_setpoint", new=AsyncMock()
     ) as mock_write:
-        await coordinator._distribute_to_numeric_arrays(-40.0, now=10.0)
-        await coordinator._distribute_to_numeric_arrays(-40.0, now=11.0)
+        await coordinator._engine._distribute_to_numeric_arrays(
+            -40.0, 10.0, coordinator.arrays
+        )
+        await coordinator._engine._distribute_to_numeric_arrays(
+            -40.0, 11.0, coordinator.arrays
+        )
 
     mock_write.assert_awaited_once()
-    assert coordinator._current_setpoints["A"] == 16.0
+    assert coordinator._engine._current_setpoints["A"] == 16.0
 
 
 async def test_distribute_to_numeric_arrays_skips_zero_delta_units_and_zero_headroom(
@@ -336,14 +344,18 @@ async def test_distribute_to_numeric_arrays_skips_zero_delta_units_and_zero_head
             settling_time_s=10,
         )
     ]
-    coordinator._current_setpoints = {"A": 100.0}
+    coordinator._engine._current_setpoints = {"A": 100.0}
 
     with patch.object(
         coordinator._actuators, "write_setpoint", new=AsyncMock()
     ) as mock_write:
-        await coordinator._distribute_to_numeric_arrays(50.0, now=10.0)
-        coordinator._current_setpoints["A"] = 50.0
-        await coordinator._distribute_to_numeric_arrays(10.0, now=10.0)
+        await coordinator._engine._distribute_to_numeric_arrays(
+            50.0, 10.0, coordinator.arrays
+        )
+        coordinator._engine._current_setpoints["A"] = 50.0
+        await coordinator._engine._distribute_to_numeric_arrays(
+            10.0, 10.0, coordinator.arrays
+        )
 
     mock_write.assert_not_awaited()
 
@@ -367,17 +379,23 @@ async def test_apply_switch_hysteresis_honors_debounce(hass):
             switch_debounce_s=30,
         )
     ]
-    coordinator._current_setpoints = {"Switch": 0.0}
+    coordinator._engine._current_setpoints = {"Switch": 0.0}
 
     with patch.object(
         coordinator._actuators, "write_setpoint", new=AsyncMock()
     ) as mock_write:
-        await coordinator._apply_switch_hysteresis(150.0, now=10.0)
-        await coordinator._apply_switch_hysteresis(150.0, now=15.0)
-        await coordinator._apply_switch_hysteresis(-60.0, now=50.0)
+        await coordinator._engine._apply_switch_hysteresis(
+            150.0, 10.0, coordinator.arrays
+        )
+        await coordinator._engine._apply_switch_hysteresis(
+            150.0, 15.0, coordinator.arrays
+        )
+        await coordinator._engine._apply_switch_hysteresis(
+            -60.0, 50.0, coordinator.arrays
+        )
 
     assert mock_write.await_count == 2
-    assert coordinator._current_setpoints["Switch"] == 0.0
+    assert coordinator._engine._current_setpoints["Switch"] == 0.0
 
 
 async def test_update_data_resets_negative_battery_target_while_array_settling(
@@ -408,8 +426,8 @@ async def test_update_data_resets_negative_battery_target_while_array_settling(
             settling_time_s=20,
         )
     ]
-    coordinator._current_battery_setpoints["Battery"] = -500.0
-    coordinator._settling_until["Solar"] = 9999999999.0
+    coordinator._engine._current_battery_setpoints["Battery"] = -500.0
+    coordinator._engine._settling_until["Solar"] = 9999999999.0
 
     hass.states.async_set("sensor.grid_import", "200")
     hass.states.async_set("sensor.grid_export", "0")
@@ -449,7 +467,9 @@ async def test_apply_switch_hysteresis_noop_below_threshold(hass):
     with patch.object(
         coordinator._actuators, "write_setpoint", new=AsyncMock()
     ) as mock_write:
-        await coordinator._apply_switch_hysteresis(20.0, now=10.0)
+        await coordinator._engine._apply_switch_hysteresis(
+            20.0, 10.0, coordinator.arrays
+        )
 
     mock_write.assert_not_awaited()
 
@@ -508,7 +528,7 @@ async def test_persist_calibration_results_updates_matching_subentry(hass):
         coordinator.arrays[0].calibration_confidence == CALIBRATION_CONFIDENCE_MEASURED
     )
     assert coordinator.arrays[0].derived_max_power_w == pytest.approx(1500.0)
-    assert coordinator._pid.kp == pytest.approx(1.0, rel=0.01)
+    assert coordinator._engine.pid.kp == pytest.approx(1.0, rel=0.01)
 
 
 async def test_persist_calibration_results_skips_unsuccessful_or_unknown_arrays(hass):
@@ -598,13 +618,15 @@ async def test_distribute_skips_array_with_zero_w_per_unit(hass):
             settling_time_s=10,
         )
     ]
-    coordinator._current_setpoints = {"Broken": 50.0}
+    coordinator._engine._current_setpoints = {"Broken": 50.0}
 
     with patch.object(
         coordinator._actuators, "write_setpoint", new=AsyncMock()
     ) as mock_write:
         # Should not raise ZeroDivisionError
-        await coordinator._distribute_to_numeric_arrays(200.0, now=0.0)
+        await coordinator._engine._distribute_to_numeric_arrays(
+            200.0, 0.0, coordinator.arrays
+        )
 
     mock_write.assert_not_awaited()
 
@@ -699,10 +721,10 @@ async def test_can_open_blocks_when_power_below_expected(hass):
         settling_time_s=10,
         power_sensor_entity="sensor.solar_power",
     )
-    coordinator._current_setpoints = {"Solar": 80.0}
+    coordinator._engine._current_setpoints = {"Solar": 80.0}
     # Expected power at 80 units: (80 - 1) * 10 = 790 W; actual is 100 W
     hass.states.async_set("sensor.solar_power", "100")
-    assert coordinator._can_open(array) is False
+    assert coordinator._engine._can_open(array) is False
 
 
 async def test_can_open_allows_when_power_meets_expected(hass):
@@ -721,9 +743,9 @@ async def test_can_open_allows_when_power_meets_expected(hass):
         settling_time_s=10,
         power_sensor_entity="sensor.solar_power",
     )
-    coordinator._current_setpoints = {"Solar": 80.0}
+    coordinator._engine._current_setpoints = {"Solar": 80.0}
     hass.states.async_set("sensor.solar_power", "800")
-    assert coordinator._can_open(array) is True
+    assert coordinator._engine._can_open(array) is True
 
 
 async def test_numeric_array_reads_initial_setpoint_from_entity(hass):
@@ -752,4 +774,4 @@ async def test_numeric_array_reads_initial_setpoint_from_entity(hass):
         await coordinator._async_update_data()
 
     # After first cycle, setpoint should be initialised from entity state, not from max
-    assert coordinator._current_setpoints.get("Solar", 100.0) < 100.0
+    assert coordinator._engine._current_setpoints.get("Solar", 100.0) < 100.0

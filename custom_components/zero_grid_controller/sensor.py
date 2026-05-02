@@ -42,12 +42,18 @@ async def async_setup_entry(
     battery_devices: dict[str, DeviceInfo] = entry.runtime_data.battery_devices
     load_devices: dict[str, DeviceInfo] = entry.runtime_data.load_devices
 
+    calib_progress_sensor = ZGCCalibrationProgressSensor(
+        coordinator, entry, main_device
+    )
+    coordinator.calibration_progress_sensor = calib_progress_sensor
+
     async_add_entities(
         [
             ZGCGridRawSensor(coordinator, entry, main_device),
             ZGCGridFilteredSensor(coordinator, entry, main_device),
             ZGCPIDOutputSensor(coordinator, entry, main_device),
             ZGCStatusSensor(coordinator, entry, main_device),
+            calib_progress_sensor,
         ]
     )
 
@@ -299,3 +305,31 @@ class ZGCLoadSetpointSensor(ZGCSensorBase):
             return None
         sp = result.load_setpoints.get(self._load_name)
         return round(sp, 2) if sp is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Calibration progress sensor
+# ---------------------------------------------------------------------------
+
+
+class ZGCCalibrationProgressSensor(ZGCSensorBase):
+    """Reports calibration lifecycle state: idle / running / done / failed."""
+
+    _attr_translation_key = "calibration_status"
+
+    def __init__(
+        self, coordinator: ZeroGridCoordinator, entry: ConfigEntry, device: DeviceInfo
+    ) -> None:
+        super().__init__(coordinator, entry, device)
+        self._attr_unique_id = f"{entry.entry_id}_calibration_status"
+        self._status: str = "idle"
+
+    def set_status(self, status: str) -> None:
+        """Update calibration status and push to HA state machine."""
+        self._status = status
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> str:
+        """Return current calibration status string."""
+        return self._status

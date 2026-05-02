@@ -24,6 +24,7 @@ from .const import (
     CALIBRATION_CONFIDENCE_MEASURED,
     CONTROL_INTERVAL_S,
 )
+from .sensor_reader import SensorReader
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class CalibrationResult:
 
 
 WriteSetpointFn = Callable[[ArrayConfig, float], Awaitable[None]]
+OnArrayDoneFn = Callable[[int, int], None]
 
 
 class ArrayCalibrator:
@@ -57,12 +59,16 @@ class ArrayCalibrator:
         current_setpoints: dict[str, float],
         aggressiveness: str,
         write_setpoint: WriteSetpointFn,
+        sensor_reader: SensorReader | None = None,
+        on_array_done: OnArrayDoneFn | None = None,
     ) -> None:
         self._hass = hass
         self._arrays = arrays
         self._current_setpoints = current_setpoints
         self._aggressiveness = aggressiveness
         self._write_setpoint = write_setpoint
+        self._sensor_reader = sensor_reader
+        self._on_array_done = on_array_done
         self._abort = False
 
     def abort(self) -> None:
@@ -87,6 +93,8 @@ class ArrayCalibrator:
                 _LOGGER.exception("Unexpected error calibrating %s", array.name)
                 result = self._failed(array, "Unexpected error during calibration")
             results.append(result)
+            if self._on_array_done is not None:
+                self._on_array_done(len(results), len(numeric))
             _LOGGER.info(
                 "Calibration %s for %s: w_per_unit=%.2f, settling=%d s",
                 "OK" if result.success else "FAILED",
@@ -157,13 +165,14 @@ class ArrayCalibrator:
                 f"Derived max power implausible: {derived_max_power_w:.0f} W",
             )
 
+        # Add 50 % safety margin so the controller doesn't re-command before
+        # the inverter has fully settled, even on cloudy or cold days when the
+        # response is slower than during the calibration run.
+        raw_settling = max(settle_30_down, settle_20, settle_30_up)
         settling_time_s = int(
             max(
                 CALIB_SETTLING_MIN_S,
-                min(
-                    CALIB_SETTLING_MAX_S,
-                    max(settle_30_down, settle_20, settle_30_up),
-                ),
+                min(CALIB_SETTLING_MAX_S, raw_settling * 1.5),
             )
         )
         return CalibrationResult(
@@ -174,8 +183,8 @@ class ArrayCalibrator:
             kp=0.0,
             ki=0.0,
             derived_max_power_w=round(derived_max_power_w, 3),
-            settling_down_s=int(settle_20),
-            settling_up_s=int(settle_30_up),
+            settling_down_s=int(settle_20 * 1.5),
+            settling_up_s=int(settle_30_up * 1.5),
         )
 
     async def _wait_for_stable_power(
@@ -206,6 +215,8 @@ class ArrayCalibrator:
     def _read_power_sensor(self, entity_id: str | None) -> float | None:
         if not entity_id:
             return None
+        if self._sensor_reader is not None:
+            return self._sensor_reader.read_sensor_safe(entity_id)
         state = self._hass.states.get(entity_id)
         if state is None or state.state in ("unavailable", "unknown"):
             return None
@@ -244,8 +255,11 @@ class ArrayCalibrator:
     ) -> bool:
         max_from_30 = power_30 / 0.30 if power_30 > 0 else 0.0
         max_from_20 = power_20 / 0.20 if power_20 > 0 else 0.0
-        lower_bound = 0.5 * min(max_from_20, max_from_30)
-        upper_bound = 1.5 * max(max_from_20, max_from_30)
+        # ±15 % tolerance: tight enough to catch real calibration problems
+        # (measurement noise alone is typically < 2 %), yet loose enough to
+        # accept minor inverter nonlinearities and firmware hysteresis.
+        lower_bound = 0.85 * min(max_from_20, max_from_30)
+        upper_bound = 1.15 * max(max_from_20, max_from_30)
         return lower_bound <= derived_max_power_w <= upper_bound
 
     @staticmethod

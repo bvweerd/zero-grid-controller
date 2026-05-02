@@ -179,10 +179,12 @@ Calibration confidence is shown in the diagnostics analyzer. Arrays showing `est
 |--------|-------------|
 | `sensor.*_grid_raw_w` | Unfiltered grid power (W) |
 | `sensor.*_grid_filtered_w` | EWM-filtered grid power (W) |
-| `sensor.*_pid_output_w` | PID output (W) |
+| `sensor.*_pid_output_w` | PID output / control signal (W) |
 | `sensor.*_status` | Controller status: `active` / `deadband` / `disabled` |
+| `sensor.*_calibration_status` | Calibration lifecycle: `idle` / `running` / `done` / `failed` |
 | `number.*_deadband_w` | Deadband (W) |
 | `number.*_ewm_alpha` | EWM filter alpha |
+| `switch.*_controller_enabled` | Enable / disable the controller |
 | `button.*_reset_pid` | Reset PID integrator |
 | `button.*_recalibrate` | Re-run step-response calibration |
 
@@ -190,14 +192,20 @@ Calibration confidence is shown in the diagnostics analyzer. Arrays showing `est
 
 | Entity | Description |
 |--------|-------------|
-| `sensor.*_setpoint` | Current setpoint value for numeric arrays |
-| `binary_sensor.*_setpoint` | Current commanded on/off state for switch arrays |
+| `sensor.*_setpoint` | Current setpoint value (numeric arrays) |
+| `binary_sensor.*_setpoint` | Current commanded on/off state (switch arrays) |
 
 ### Per battery (sub-device)
 
 | Entity | Description |
 |--------|-------------|
 | `sensor.*_setpoint` | Current commanded setpoint (W) |
+
+### Per controllable load (sub-device)
+
+| Entity | Description |
+|--------|-------------|
+| `sensor.*_setpoint` | Current setpoint value (numeric loads) |
 
 ---
 
@@ -253,7 +261,8 @@ Only when all numeric PV arrays are already at their maximum setpoint and the gr
 
 - **`pid.py`** — Discrete PID with conditional anti-windup and per-cycle integrator freeze.
 - **`calibrator.py`** — Async midpoint calibration with direct array power sensors; measures W/unit, derived max power, and directional settling times.
-- **`coordinator.py`** — `DataUpdateCoordinator` subclass; runs every 5 s. Owns the 8-step control loop.
+- **`coordinator.py`** — `DataUpdateCoordinator` subclass; runs every 5 s. HA integration glue — delegates all control logic to `ControlEngine`.
+- **`control_engine.py`** — Pure stateful control logic (EWM filter, PID, battery layers, distribution, hysteresis); no HA lifecycle imports, independently unit-testable.
 - **`array.py`** — `ArrayConfig` dataclass; one per PV array subentry.
 - **`battery.py`** — `BatteryConfig` dataclass; one per battery subentry.
 - **`load.py`** — `LoadConfig` dataclass; one per controllable load subentry (numeric or switch).

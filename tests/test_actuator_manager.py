@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.zero_grid_controller.actuator_manager import ActuatorManager
 from custom_components.zero_grid_controller.array import ArrayConfig
@@ -77,10 +78,11 @@ async def test_write_numeric_entity_unsupported_domain(hass_mock):
         await manager.write_numeric_entity("sensor.test", 10.0)
 
 
-async def test_write_numeric_entity_skips_unavailable(hass_mock):
+async def test_write_numeric_entity_raises_on_unavailable(hass_mock):
     hass_mock.states.get.return_value = MagicMock(state="unavailable")
     manager = ActuatorManager(hass_mock)
-    await manager.write_numeric_entity("number.test", 10.0)
+    with pytest.raises(HomeAssistantError, match="unavailable"):
+        await manager.write_numeric_entity("number.test", 10.0)
     hass_mock.services.async_call.assert_not_called()
 
 

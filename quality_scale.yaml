@@ -19,8 +19,9 @@ rules:
     status: done
     comment: >
       pid.py (PID controller), array.py (array dataclass),
-      calibrator.py (calibration logic), battery.py, actuator_manager.py,
-      repairs.py, utils.py, const.py.
+      calibrator.py (calibration logic), battery.py, load.py,
+      control_engine.py (pure control logic), sensor_reader.py (protocol),
+      actuator_manager.py, repairs.py, utils.py, const.py.
   config-flow-test-coverage:
     status: done
     comment: >
@@ -31,9 +32,10 @@ rules:
   config-flow:
     status: done
     comment: >
-      Wizard-style ConfigFlow with steps: user → mode_guard → mode_mapping → done.
-      PV arrays and batteries are managed via ConfigSubentryFlow add/reconfigure
-      flows. OptionsFlow currently exposes expert mode only.
+      Wizard-style ConfigFlow for initial setup (grid sensors, deadband, EWM alpha,
+      aggressiveness). Three ConfigSubentryFlow types: array, battery, load — each
+      with add and reconfigure steps. OptionsFlow exposes the same main parameters
+      as the initial setup wizard.
   dependency-transparency:
     status: done
     comment: >
@@ -120,10 +122,10 @@ rules:
   test-coverage:
     status: done
     comment: >
-      126 tests across pid.py, coordinator (including edge cases), config_flow,
-      calibration, actuator_manager, array/battery config, entities (sensor,
-      number, switch, button, binary_sensor), diagnostics, repairs, init,
-      platform behaviours, simulation, and integration scenarios.
+      169 tests across pid.py, coordinator, control_engine, config_flow,
+      calibration, actuator_manager, load control, array/battery config,
+      entities (sensor, number, switch, button, binary_sensor), diagnostics,
+      repairs, init, platform behaviours, simulation, and integration scenarios.
 
   # Gold
   devices:
@@ -228,4 +230,4 @@ rules:
     comment: No HTTP calls; integration reads local HA states only.
   strict-typing:
     status: done
-    comment: mypy --strict passes with no issues on all 17 source files.
+    comment: mypy --strict passes with no issues on all 20 source files.

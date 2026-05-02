@@ -135,8 +135,8 @@ async def test_reset_pid_service_honors_entry_filter(hass):
     if second.state.name == "NOT_LOADED":
         await hass.config_entries.async_setup(second.entry_id)
 
-    first.runtime_data.coordinator._pid.set_integral(12.0)
-    second.runtime_data.coordinator._pid.set_integral(15.0)
+    first.runtime_data.coordinator._engine.pid.set_integral(12.0)
+    second.runtime_data.coordinator._engine.pid.set_integral(15.0)
 
     await hass.services.async_call(
         DOMAIN,
@@ -145,8 +145,8 @@ async def test_reset_pid_service_honors_entry_filter(hass):
         blocking=True,
     )
 
-    assert first.runtime_data.coordinator._pid.integral == 0.0
-    assert second.runtime_data.coordinator._pid.integral == 15.0
+    assert first.runtime_data.coordinator._engine.pid.integral == 0.0
+    assert second.runtime_data.coordinator._engine.pid.integral == 15.0
 
 
 async def test_recalibrate_service_starts_task_for_matching_entry(hass):

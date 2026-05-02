@@ -1,5 +1,7 @@
 """Constants for Zero Grid Controller."""
 
+from enum import StrEnum
+
 from homeassistant.const import Platform
 
 DOMAIN = "zero_grid_controller"
@@ -113,10 +115,20 @@ OUTPUT_TYPE_PERCENT = "percent"
 OUTPUT_TYPE_WATT = "watt"
 OUTPUT_TYPE_SWITCH = "switch"
 
+
 # Status values
-STATUS_ACTIVE = "active"
-STATUS_DISABLED = "disabled"
-STATUS_DEADBAND = "deadband"
+class ControllerStatus(StrEnum):
+    """Controller cycle status."""
+
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    DEADBAND = "deadband"
+
+
+# Aliases for backward compatibility — existing imports are unchanged
+STATUS_ACTIVE = ControllerStatus.ACTIVE
+STATUS_DISABLED = ControllerStatus.DISABLED
+STATUS_DEADBAND = ControllerStatus.DEADBAND
 
 # Number entity UI constraints
 EWM_ALPHA_MIN = 0.05

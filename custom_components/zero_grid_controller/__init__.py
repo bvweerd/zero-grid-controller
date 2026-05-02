@@ -126,6 +126,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         entry.runtime_data = None
+        # Remove domain services when the last entry is unloaded.
+        remaining = [
+            e
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if e.entry_id != entry.entry_id and e.runtime_data is not None
+        ]
+        if not remaining:
+            hass.services.async_remove(DOMAIN, SERVICE_RESET_PID)
+            hass.services.async_remove(DOMAIN, SERVICE_RECALIBRATE)
     return unload_ok
 
 
@@ -137,6 +146,14 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate config entries to the current schema version."""
+    _LOGGER.debug(
+        "Migrating Zero Grid Controller entry from version %s.%s",
+        config_entry.version,
+        config_entry.minor_version,
+    )
+    # No migrations needed yet; this scaffold handles future version bumps.
+    # When adding a migration, increment MINOR_VERSION (backward-compatible) or
+    # VERSION (breaking) in ZeroGridConfigFlow and add a migration block here.
     return True
 
 

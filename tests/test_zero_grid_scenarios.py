@@ -84,7 +84,7 @@ async def test_import_pv_at_max_discharges_batteries(hass):
     array = _make_array(settling_time_s=0)
     coordinator.arrays = [array]
     coordinator.batteries = [_make_battery(max_discharge=2000.0)]
-    coordinator._current_setpoints["Solar"] = 100.0  # PV at max
+    coordinator._engine._current_setpoints["Solar"] = 100.0  # PV at max
 
     hass.states.async_set("sensor.grid_import", "300")
     hass.states.async_set("sensor.grid_export", "0")
@@ -119,7 +119,7 @@ async def test_switch_array_turns_on_when_importing(hass):
         switch_debounce_s=0,
     )
     coordinator.arrays = [switch_array]
-    coordinator._current_setpoints["SwitchArray"] = 0.0  # off
+    coordinator._engine._current_setpoints["SwitchArray"] = 0.0  # off
 
     hass.states.async_set("sensor.grid_import", "200")
     hass.states.async_set("sensor.grid_export", "0")
@@ -128,7 +128,7 @@ async def test_switch_array_turns_on_when_importing(hass):
     with patch.object(coordinator._actuators, "write_setpoint", new=AsyncMock()):
         await coordinator._async_update_data()
 
-    assert coordinator._current_setpoints.get("SwitchArray") == 1.0
+    assert coordinator._engine._current_setpoints.get("SwitchArray") == 1.0
 
 
 async def test_switch_array_turns_off_when_exporting(hass):
@@ -150,7 +150,7 @@ async def test_switch_array_turns_off_when_exporting(hass):
         switch_debounce_s=0,
     )
     coordinator.arrays = [switch_array]
-    coordinator._current_setpoints["SwitchArray"] = 1.0  # on
+    coordinator._engine._current_setpoints["SwitchArray"] = 1.0  # on
 
     hass.states.async_set("sensor.grid_import", "0")
     hass.states.async_set("sensor.grid_export", "200")
@@ -159,4 +159,4 @@ async def test_switch_array_turns_off_when_exporting(hass):
     with patch.object(coordinator._actuators, "write_setpoint", new=AsyncMock()):
         await coordinator._async_update_data()
 
-    assert coordinator._current_setpoints.get("SwitchArray") == 0.0
+    assert coordinator._engine._current_setpoints.get("SwitchArray") == 0.0

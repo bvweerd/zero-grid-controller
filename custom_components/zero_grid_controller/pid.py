@@ -75,6 +75,14 @@ class PIDController:
 
         if not self._freeze and not (at_limit and pushing_into_limit):
             self._integral += error * dt
+            # Hard clamp: prevent integral from growing beyond what ki can
+            # contribute to reach the output limits (belt-and-suspenders guard).
+            if self._ki > 0 and self._output_max is not None:
+                integral_max = self._output_max / self._ki
+                if self._integral > integral_max:
+                    self._integral = integral_max
+                elif self._integral < -integral_max:
+                    self._integral = -integral_max
         self._freeze = False  # reset per-cycle freeze flag
 
         self._i = self._ki * self._integral

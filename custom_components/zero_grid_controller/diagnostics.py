@@ -25,10 +25,10 @@ async def async_get_config_entry_diagnostics(
         "setpoints": dict(result.setpoints) if result else {},
         "battery_setpoints": dict(result.battery_setpoints) if result else {},
         "pid": {
-            "kp": coordinator._pid.kp,
-            "ki": coordinator._pid.ki,
-            "kd": coordinator._pid.kd,
-            "integral": round(coordinator._pid.integral, 3),
+            "kp": coordinator._engine.pid.kp,
+            "ki": coordinator._engine.pid.ki,
+            "kd": coordinator._engine.pid.kd,
+            "integral": round(coordinator._engine.pid.integral, 3),
             "basis": coordinator._diagnostics_pid_basis(),
         },
         "arrays": [

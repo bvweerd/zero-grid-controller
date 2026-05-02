@@ -58,7 +58,7 @@ async def test_diagnostics_returns_runtime_snapshot(hass):
             setpoint_entity="number.battery_limit",
         )
     ]
-    coordinator._pid.set_integral(1.2345)
+    coordinator._engine.pid.set_integral(1.2345)
     coordinator.data = ZGCResult(
         grid_raw_w=123.0,
         grid_filtered_w=100.0,

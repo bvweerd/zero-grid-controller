@@ -8,14 +8,14 @@
           "name": "Integratienaam",
           "grid_import_sensors": "Grid importsensoren (vermogen afgenomen van net)",
           "grid_export_sensors": "Grid exportsensoren (vermogen geleverd aan net, optioneel)",
-          "deadband_w": "Dodeband (W)",
-          "ewm_alpha": "EWM-filter alpha",
-          "aggressiveness": "Regelsnelheid"
+          "deadband_w": "Negeringszone (W)",
+          "ewm_alpha": "Signaalfiltering (0 = zwaar, 1 = geen)",
+          "aggressiveness": "Reactiesnelheid"
         },
         "data_description": {
-          "deadband_w": "Gridfout kleiner dan deze waarde wordt genegeerd. Voorkomt onnodige setpointwijzigingen dicht bij nul.",
-          "ewm_alpha": "Smoothingfactor voor het gridsignaal (0,05 = veel smoothing, 1,0 = geen filter).",
-          "aggressiveness": "Bepaalt hoe agressief de PID-versterking wordt ingesteld na kalibratie."
+          "deadband_w": "Gridschommelingen binnen ±deze waarde worden genegeerd. Voorkomt constante micro-aanpassingen als het al bijna nul is. Begin met 20 W.",
+          "ewm_alpha": "Hoe snel de controller reageert op gridwijzigingen. Lager = vloeiender maar trager (0,1), hoger = sneller maar grilliger (0,5). Standaard 0,3 is geschikt voor de meeste systemen.",
+          "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven."
         }
       }
     },
@@ -60,7 +60,7 @@
             "setpoint_max": "Maximale setpointwaarde"
           },
           "data_description": {
-            "power_sensor_entity": "Vermogensensor per array voor midpoint-kalibratie van 30% naar 20%.",
+            "power_sensor_entity": "Vermogensensor per array om de omvormerrespons te meten tijdens kalibratie en schaduwinval te detecteren.",
             "setpoint_min": "De laagste waarde die de controller ooit schrijft (bijv. 0% of 0 W).",
             "setpoint_max": "De hoogste waarde — volledig vermogen. Kalibratie gebruikt dit bereik om de omvormerversterking te meten."
           }
@@ -168,9 +168,9 @@
             "setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het laadvermogen aan te passen.",
             "setpoint_min": "Laagst toegestane setpointwaarde (doorgaans 0 = uit).",
             "setpoint_max": "Hoogst toegestane setpointwaarde.",
-            "w_per_unit": "Vermogenswijziging per setpointeenheid (bijv. 230 W/A voor een 1-fase EV-lader).",
-            "absolute_min_w": "Als ingesteld, moet de belasting volledig uit zijn of op of boven dit vermogen. EV-laders die minimaal 6 A (1380 W) nodig hebben bij gebruik, moeten dit instellen. Laat op 0 voor uitgeschakeld.",
-            "settling_time_s": "Seconden wachten na een setpointwijziging voordat opnieuw bijgestuurd wordt.",
+            "w_per_unit": "Vermogenswijziging per setpointeenheid. Voor een EV-lader: 230 W/A (1-fase 230 V) of 690 W/A (3-fase 400 V). Voor een boiler of andere belasting: meet het op of raadpleeg de handleiding.",
+            "absolute_min_w": "Minimaal vermogen wanneer aan. Sommige EV-laders vereisen minimaal 6 A (1380 W 1-fase) en kunnen hier niet onder werken. Stel dit minimum in, of laat op 0 als uw apparaat helemaal naar nul kan.",
+            "settling_time_s": "Seconden wachten na een setpointwijziging voordat opnieuw bijgestuurd wordt. De meeste EV-laders en omvormers hebben 10–30 s nodig om te stabiliseren.",
             "power_sensor_entity": "Optionele sensor die het werkelijke belastingvermogen meet voor monitoring.",
             "load_priority": "Lagere waarde = hogere prioriteit. De hoogst-prioritaire belasting absorbeert overschot als eerste en wordt het laatste verminderd."
           }
@@ -207,14 +207,14 @@
           "name": "Integratienaam",
           "grid_import_sensors": "Grid importsensoren",
           "grid_export_sensors": "Grid exportsensoren (optioneel)",
-          "deadband_w": "Dodeband (W)",
-          "ewm_alpha": "EWM-filter alpha",
-          "aggressiveness": "Regelsnelheid"
+          "deadband_w": "Negeringszone (W)",
+          "ewm_alpha": "Signaalfiltering (0 = zwaar, 1 = geen)",
+          "aggressiveness": "Reactiesnelheid"
         },
         "data_description": {
-          "deadband_w": "Gridfout kleiner dan deze waarde wordt genegeerd. Voorkomt onnodige setpointwijzigingen dicht bij nul.",
-          "ewm_alpha": "Smoothingfactor voor het gridsignaal (0,05 = veel smoothing, 1,0 = geen filter).",
-          "aggressiveness": "Bepaalt hoe agressief de PID-versterking wordt ingesteld na kalibratie."
+          "deadband_w": "Gridschommelingen binnen ±deze waarde worden genegeerd. Voorkomt constante micro-aanpassingen als het al bijna nul is. Begin met 20 W.",
+          "ewm_alpha": "Hoe snel de controller reageert op gridwijzigingen. Lager = vloeiender maar trager (0,1), hoger = sneller maar grilliger (0,5). Standaard 0,3 is geschikt voor de meeste systemen.",
+          "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven."
         }
       }
     }
@@ -228,7 +228,7 @@
         "name": "Gridvermogen (gefilterd)"
       },
       "pid_output_w": {
-        "name": "PID-uitgang"
+        "name": "Stuursignaal (W)"
       },
       "status": {
         "name": "Controllerstatus",
@@ -246,6 +246,15 @@
       },
       "load_setpoint": {
         "name": "Setpoint"
+      },
+      "calibration_status": {
+        "name": "Kalibratiestatus",
+        "state": {
+          "idle": "Inactief",
+          "running": "Bezig",
+          "done": "Klaar",
+          "failed": "Mislukt"
+        }
       }
     },
     "binary_sensor": {

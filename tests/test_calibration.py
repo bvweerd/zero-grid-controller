@@ -282,4 +282,6 @@ async def test_calibration_uses_slower_return_direction_for_settling_time():
         result = (await calibrator.run())[0]
 
     assert result.success is True
-    assert result.settling_time_s == pytest.approx(25)
+    # Raw slowest settling = 25 s (return direction took 5 samples × 5 s).
+    # Stored value includes the 1.5× safety margin: int(25 * 1.5) = 37 s.
+    assert result.settling_time_s == pytest.approx(37)

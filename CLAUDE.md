@@ -14,12 +14,15 @@ Home Assistant custom integration that keeps net grid power at 0 W by auto-contr
 - `hacs.json` — HACS metadata
 
 ## Key modules
-- `coordinator.py` — `DataUpdateCoordinator` subclass, runs every 5 s
+- `coordinator.py` — `DataUpdateCoordinator` subclass, runs every 5 s; HA lifecycle glue only
+- `control_engine.py` — stateful pure control logic (PID, EWM, distribution, hysteresis); no HA imports
+- `sensor_reader.py` — `SensorReader` protocol for decoupled HA state access
 - `pid.py` — discrete PID with anti-windup and per-cycle integrator freeze
-- `estimator.py` — scalar RLS estimator for online gain identification
 - `calibrator.py` — async step-response calibration
-- `config_flow.py` — wizard + options + array subentry flows
+- `config_flow.py` — wizard + options + array/battery/load subentry flows
 - `array.py` — `ArrayConfig` dataclass (one per PV array subentry)
+- `battery.py` — `BatteryConfig` dataclass (one per battery subentry)
+- `load.py` — `LoadConfig` dataclass (one per controllable load subentry)
 
 ## HA conventions
 - Use `async def` for all platform setup and I/O operations

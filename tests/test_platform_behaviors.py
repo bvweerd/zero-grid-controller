@@ -36,6 +36,7 @@ from custom_components.zero_grid_controller.number import (
 from custom_components.zero_grid_controller.sensor import (
     ZGCArraySetpointSensor,
     ZGCBatterySetpointSensor,
+    ZGCCalibrationProgressSensor,
     ZGCGridFilteredSensor,
     ZGCGridRawSensor,
     ZGCPIDOutputSensor,
@@ -149,8 +150,9 @@ async def test_sensor_platform_setup_adds_main_and_subentry_entities(hass):
 
     await sensor_async_setup_entry(hass, entry, async_add_entities)
 
-    assert len(added[0][0]) == 4
+    assert len(added[0][0]) == 5
     assert isinstance(added[0][0][0], ZGCGridRawSensor)
+    assert isinstance(added[0][0][4], ZGCCalibrationProgressSensor)
     assert added[1][1] == "array-1"
     assert isinstance(added[1][0][0], ZGCArraySetpointSensor)
     assert added[2][1] == "battery-1"
