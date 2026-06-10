@@ -23,6 +23,15 @@ grid_w = consumption − PV_delivered − battery_net
 1. When exporting (grid < 0): charge batteries → increase controllable loads → curtail PV arrays
 2. When importing (grid > 0): open PV arrays → reduce controllable loads → discharge batteries (last resort)
 
+Battery commands are incremental: the controller adjusts the battery target
+relative to its *measured* power, and feeds the still-pending battery response
+forward into the PID so the two layers never fight each other. Curtailed PV is
+also gradually recovered into spare battery charge capacity, so production is
+not left on the table once the grid is balanced.
+
+All power sensors may report in W, kW, MW or mW — values are converted using
+the sensor's unit of measurement.
+
 ---
 
 ## Prerequisites
@@ -62,6 +71,7 @@ Go to **Settings → Devices & Services → Add Integration** and search for **Z
 - **Deadband**: grid error below this value (W) is ignored — the controller does nothing.
 - **EWM filter alpha**: smoothing factor for the grid signal. Lower = smoother but slower.
 - **Control aggressiveness**: how aggressively PID gains are set after calibration (cautious / normal / fast).
+- **Failsafe behaviour**: what happens to PV limits when the grid sensors are unavailable or the controller is disabled. **Maximize** (default) opens PV to full output — right for self-consumption setups. **Curtail** moves PV to minimum — required for zero-export installations. Short sensor dropouts (up to ~15 s) hold the current state before failsafe engages.
 
 ### Adding PV arrays (subentries)
 
@@ -119,6 +129,15 @@ Go to the integration card and choose **Add entry → Battery**:
 - **Maximum charge power**: maximum W the battery can absorb.
 - **Maximum discharge power**: maximum W the battery can deliver.
 - **Battery setpoint entity**: the `number.*` entity to command the battery target power.
+- **State of charge sensor** (optional): when set, charging stops at the maximum SoC and discharging stops at the minimum SoC.
+- **Minimum / maximum state of charge**: SoC limits in % (defaults 10 / 95).
+
+**Battery behaviour**: the battery absorbs export first (before loads and
+curtailment) and discharges only as a last resort, when all numeric PV arrays
+are at maximum *and* all controllable loads are off or at minimum. Commands
+are incremental — on grid reversal the charge backs off smoothly instead of
+resetting. A battery that stops following its commands is distrusted after a
+short window so it cannot block curtailment.
 
 ---
 
@@ -154,6 +173,8 @@ Or via service:
 service: zero_grid_controller.recalibrate
 data: {}
 ```
+
+Calibration suspends normal control. As a safety guard, an array's calibration is aborted when the net grid power exceeds ±3000 W during the run; the original setpoint is always restored.
 
 Calibration runs one array at a time. For each numeric array it:
 1. Moves the array to a midpoint workpoint at `30%`.
@@ -249,11 +270,11 @@ Yes. Add a second PV array via **Add entry → PV array**. Each array gets its o
 
 **Can I disable the controller temporarily?**
 
-Set an **Enable switch** in the main settings. Turning the switch off puts the controller in safe state (numeric arrays at maximum, batteries at zero).
+Set an **Enable switch** in the main settings. Turning the switch off puts the controller in safe state (numeric arrays follow the configured failsafe behaviour, batteries at zero).
 
 **When does the battery discharge?**
 
-Only when all numeric PV arrays are already at their maximum setpoint and the grid is still importing. The battery is the last resort for import, not the first.
+Only when all numeric PV arrays are at their maximum setpoint, all controllable loads are off or at minimum, and the grid is still importing. The battery is the last resort for import, not the first. With a SoC sensor configured, discharge also stops at the minimum state of charge.
 
 ---
 

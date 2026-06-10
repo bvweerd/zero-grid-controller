@@ -29,6 +29,7 @@ from .const import (
     CONF_DEADBAND_W,
     CONF_DERIVED_MAX_POWER_W,
     CONF_EWM_ALPHA,
+    CONF_FAILSAFE_MODE,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
     CONF_KD,
@@ -43,17 +44,20 @@ from .const import (
     DEFAULT_AGGRESSIVENESS,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
+    DEFAULT_FAILSAFE_MODE,
     DEFAULT_KD,
     DEFAULT_KI,
     DEFAULT_KP,
     DEFAULT_OUTPUT_MAX_W,
     DOMAIN,
+    GRID_UNAVAILABLE_TOLERANCE_CYCLES,
     LOAD_SUBENTRY_TYPE,
 )
 from .control_engine import ControlCycleResult, ControlEngine
 from .load import load_config_from_subentry
 from .pid import PIDController
 from .repairs import dismiss_grid_sensor_unavailable, raise_grid_sensor_unavailable
+from .utils import power_unit_factor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +94,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._actuators = ActuatorManager(hass)
         self._calibrator: ArrayCalibrator | None = None
         self._grid_sensor_unavailable: bool = False
+        self._grid_unavail_count: int = 0
         # Set by sensor.py after entity registration
         self.calibration_progress_sensor: ZGCCalibrationProgressSensor | None = None
 
@@ -122,6 +127,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         self._aggressiveness: str = data.get(
             CONF_AGGRESSIVENESS, DEFAULT_AGGRESSIVENESS
         )
+        self._failsafe_mode: str = data.get(CONF_FAILSAFE_MODE, DEFAULT_FAILSAFE_MODE)
 
         self._import_sensors: list[str] = data.get(CONF_GRID_IMPORT_SENSORS, [])
         self._export_sensors: list[str] = data.get(CONF_GRID_EXPORT_SENSORS, [])
@@ -152,10 +158,13 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 actuators=self._actuators,
                 ewm_alpha=self._ewm_alpha,
                 deadband_w=self._deadband_w,
+                failsafe_mode=self._failsafe_mode,
             )
         else:
             # Reload — update params, preserve all setpoint and filter state
-            self._engine.update_params(new_pid, self._ewm_alpha, self._deadband_w)
+            self._engine.update_params(
+                new_pid, self._ewm_alpha, self._deadband_w, self._failsafe_mode
+            )
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -196,6 +205,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             write_setpoint=self._actuators.write_setpoint,
             sensor_reader=self,
             on_array_done=self._on_calibration_array_done,
+            read_grid=self._read_grid,
         )
         try:
             results = await self._calibrator.run()
@@ -231,13 +241,29 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         try:
             grid_raw = await self._read_grid()
             if grid_raw is None:
+                self._grid_unavail_count += 1
+                if (
+                    self._grid_unavail_count < GRID_UNAVAILABLE_TOLERANCE_CYCLES
+                    and self.data is not None
+                ):
+                    # Transient dropout: hold all actuators, freeze the
+                    # integrator and wait before declaring failsafe.
+                    _LOGGER.debug(
+                        "Grid sensor(s) unavailable (%d/%d), holding state",
+                        self._grid_unavail_count,
+                        GRID_UNAVAILABLE_TOLERANCE_CYCLES,
+                    )
+                    self._engine.pid.freeze_integrator()
+                    return self.data
                 if not self._grid_sensor_unavailable:
                     self._grid_sensor_unavailable = True
                     raise_grid_sensor_unavailable(self.hass)
                 _LOGGER.warning("Grid sensor(s) unavailable, entering safe state")
-            elif self._grid_sensor_unavailable:
-                self._grid_sensor_unavailable = False
-                dismiss_grid_sensor_unavailable(self.hass)
+            else:
+                self._grid_unavail_count = 0
+                if self._grid_sensor_unavailable:
+                    self._grid_sensor_unavailable = False
+                    dismiss_grid_sensor_unavailable(self.hass)
 
             return await self._engine.run_cycle(
                 grid_raw=grid_raw,
@@ -285,6 +311,17 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         except ValueError:
             return None
 
+    def read_power_w(self, entity_id: str) -> float | None:
+        """Read a power sensor in Watts, converting kW/MW/mW units."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            value = float(state.state)
+        except ValueError:
+            return None
+        return value * power_unit_factor(state.attributes.get("unit_of_measurement"))
+
     def entity_state(self, entity_id: str) -> str | None:
         """Return entity state string, or None if missing/unavailable/unknown."""
         state = self.hass.states.get(entity_id)
@@ -293,15 +330,15 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         return str(state.state)
 
     async def _read_grid(self) -> float | None:
-        """Read and sum grid import/export sensors. Returns None on failure."""
+        """Read and sum grid import/export sensors (in W). None on failure."""
         total = 0.0
         for entity_id in self._import_sensors:
-            val = self.read_sensor_safe(entity_id)
+            val = self.read_power_w(entity_id)
             if val is None:
                 return None
             total += val
         for entity_id in self._export_sensors:
-            val = self.read_sensor_safe(entity_id)
+            val = self.read_power_w(entity_id)
             if val is None:
                 return None
             total -= val

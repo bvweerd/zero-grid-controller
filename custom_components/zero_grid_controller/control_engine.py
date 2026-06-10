@@ -12,8 +12,13 @@ from .actuator_manager import ActuatorManager
 from .array import ArrayConfig
 from .battery import BatteryConfig
 from .const import (
+    BATTERY_PENDING_S,
+    BATTERY_WRITE_THRESHOLD_W,
     CONTROL_DT_MAX,
     CONTROL_DT_MIN,
+    DEFAULT_FAILSAFE_MODE,
+    PV_RECOVERY_STEP_W,
+    PV_RECOVERY_TRACKING_TOLERANCE_W,
     STATUS_ACTIVE,
     STATUS_DEADBAND,
     STATUS_DISABLED,
@@ -21,9 +26,30 @@ from .const import (
 )
 from .load import LoadConfig
 from .pid import PIDController
-from .utils import clamp
+from .utils import clamp, power_unit_factor
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class BatteryState:
+    """Measured state and effective capacities of all batteries this cycle."""
+
+    actuals: dict[str, float] = field(default_factory=dict)
+    charge_caps: dict[str, float] = field(default_factory=dict)
+    discharge_caps: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def total_actual(self) -> float:
+        return sum(self.actuals.values())
+
+    @property
+    def total_charge_cap(self) -> float:
+        return sum(self.charge_caps.values())
+
+    @property
+    def total_discharge_cap(self) -> float:
+        return sum(self.discharge_caps.values())
 
 
 @dataclass
@@ -55,12 +81,14 @@ class ControlEngine:
         actuators: ActuatorManager,
         ewm_alpha: float,
         deadband_w: float,
+        failsafe_mode: str = DEFAULT_FAILSAFE_MODE,
     ) -> None:
         self._hass = hass
         self._pid = pid
         self._actuators = actuators
         self._ewm_alpha = ewm_alpha
         self._deadband_w = deadband_w
+        self._failsafe_mode = failsafe_mode
 
         self._filtered_w: float | None = None
         self._filter_sample_count: int = 0
@@ -71,6 +99,7 @@ class ControlEngine:
         self._current_load_setpoints: dict[str, float] = {}
         self._settling_until: dict[str, float] = {}
         self._load_settling_until: dict[str, float] = {}
+        self._battery_pending_until: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -106,11 +135,13 @@ class ControlEngine:
         pid: PIDController,
         ewm_alpha: float,
         deadband_w: float,
+        failsafe_mode: str = DEFAULT_FAILSAFE_MODE,
     ) -> None:
         """Update PID and filter parameters, preserving all state dicts."""
         self._pid = pid
         self._ewm_alpha = ewm_alpha
         self._deadband_w = deadband_w
+        self._failsafe_mode = failsafe_mode
 
     def restore_filter_state(
         self,
@@ -147,6 +178,11 @@ class ControlEngine:
             for k, v in self._current_battery_setpoints.items()
             if k in active_battery_names
         }
+        self._battery_pending_until = {
+            k: v
+            for k, v in self._battery_pending_until.items()
+            if k in active_battery_names
+        }
 
     async def run_cycle(
         self,
@@ -168,8 +204,12 @@ class ControlEngine:
         # 1. Grid unavailability → safe state
         if grid_raw is None:
             self._pid.reset()
+            # Restart the EWM warm-up on recovery so stale filter state does
+            # not bias the first cycles after an outage.
+            self._filtered_w = None
+            self._filter_sample_count = 0
             await self._actuators.enter_safe_state(
-                arrays, batteries, self._current_setpoints
+                arrays, batteries, self._current_setpoints, self._failsafe_mode
             )
             await self._enter_load_safe_state(loads)
             return ControlCycleResult(
@@ -212,7 +252,7 @@ class ControlEngine:
         if not enabled:
             self._pid.reset()
             await self._actuators.enter_safe_state(
-                arrays, batteries, self._current_setpoints
+                arrays, batteries, self._current_setpoints, self._failsafe_mode
             )
             await self._enter_load_safe_state(loads)
             return ControlCycleResult(
@@ -224,8 +264,15 @@ class ControlEngine:
                 load_setpoints=dict(self._current_load_setpoints),
             )
 
-        # 5. Deadband check
-        if abs(filtered) < self._deadband_w:
+        # 5. Battery state (pure reads) and PV recovery bias.  Recovery adds a
+        # virtual import so curtailed arrays gradually reopen while batteries
+        # still have spare charge capacity, instead of staying curtailed.
+        battery_state = self._read_battery_states(batteries)
+        recovery_w = self._pv_recovery_w(arrays, battery_state, filtered, now)
+
+        # 6. Deadband check (recovery deliberately bypasses the deadband —
+        # the whole point is to act while the grid is already balanced)
+        if abs(filtered) < self._deadband_w and recovery_w == 0.0:
             self._pid.freeze_integrator()
             return ControlCycleResult(
                 grid_raw_w=grid_raw,
@@ -237,106 +284,62 @@ class ControlEngine:
                 load_setpoints=dict(self._current_load_setpoints),
             )
 
-        # 6. Battery charge layer (export: grid < 0 → charge batteries)
-        if filtered < 0 and batteries:
-            total_charge_cap = sum(b.max_charge_w for b in batteries)
-            if total_charge_cap > 0:
-                charge_w = min(total_charge_cap, abs(filtered))
-                for battery in batteries:
-                    target = -(charge_w * battery.max_charge_w / total_charge_cap)
-                    try:
-                        await self._actuators.write_numeric_entity(
-                            battery.setpoint_entity, target
-                        )
-                    except Exception:
-                        _LOGGER.exception(
-                            "Failed to write charge setpoint for %s", battery.name
-                        )
-                    else:
-                        self._current_battery_setpoints[battery.name] = target
-
-        elif filtered > 0 and batteries:
-            # Reset charge targets when importing
-            for battery in batteries:
-                if self._current_battery_setpoints.get(battery.name, 0.0) < 0:
-                    try:
-                        await self._actuators.write_numeric_entity(
-                            battery.setpoint_entity, 0.0
-                        )
-                    except Exception:
-                        _LOGGER.exception(
-                            "Failed to reset charge setpoint for %s", battery.name
-                        )
-                    else:
-                        self._current_battery_setpoints[battery.name] = 0.0
-
-        # 7. Residual after battery pre-compensation — use actual measured power
-        residual = filtered - self._read_battery_actual_w(batteries)
+        # 7. Battery layer: incremental command, returns the grid residual
+        # with the still-pending battery response fed forward so downstream
+        # layers do not double-correct.
+        residual = await self._command_batteries(
+            filtered, now, batteries, battery_state, arrays, loads
+        )
+        residual += recovery_w
 
         # 7a. PID on residual
         # Negate: positive output when importing (open PV / reduce load)
         pid_output = self._pid.compute(-residual, dt)
 
-        # 7b. Numeric correction
-        _load_sp_before = {
-            ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
-            for ld in loads
-            if not ld.is_switch
-        }
-        _load_w_per_unit = {ld.name: ld.w_per_unit for ld in loads if not ld.is_switch}
-
+        # 7b. Numeric correction; track absorbed watts for feedforward
         if pid_output < 0:
             # Exporting surplus → increase loads, then curtail arrays
-            remaining = await self._distribute_to_numeric_loads(pid_output, now, loads)
-            await self._distribute_to_numeric_arrays(remaining, now, arrays)
+            after_loads = await self._distribute_to_numeric_loads(
+                pid_output, now, loads
+            )
+            load_absorbed_w = after_loads - pid_output
+            after_arrays = await self._distribute_to_numeric_arrays(
+                after_loads, now, arrays
+            )
+            array_absorbed_w = after_loads - after_arrays
+            remaining = after_arrays
         else:
             # Importing deficit → open arrays, then reduce loads
-            remaining = await self._distribute_to_numeric_arrays(
+            after_arrays = await self._distribute_to_numeric_arrays(
                 pid_output, now, arrays
             )
-            await self._distribute_to_numeric_loads(remaining, now, loads)
+            array_absorbed_w = pid_output - after_arrays
+            after_loads = await self._distribute_to_numeric_loads(
+                after_arrays, now, loads
+            )
+            load_absorbed_w = after_loads - after_arrays
+            remaining = after_loads
 
-        # Actual watts absorbed by numeric loads in this cycle
-        load_absorbed_w = sum(
-            (self._current_load_setpoints.get(name, before) - before)
-            * _load_w_per_unit[name]
-            for name, before in _load_sp_before.items()
-        )
-
-        # 7c. Switch loads: feedforward updates residual for each decision
+        # 7c. Switch loads: feedforward of numeric load AND array changes so
+        # switch decisions do not double-take corrections made this cycle
+        residual_before_switches = residual + load_absorbed_w - array_absorbed_w
         residual = await self._apply_load_switch_hysteresis(
-            residual + load_absorbed_w, now, loads
+            residual_before_switches, now, loads
         )
 
         # 7d. Switch arrays: hysteresis on updated residual
-        await self._apply_switch_hysteresis(residual, now, arrays)
+        residual = await self._apply_switch_hysteresis(residual, now, arrays)
 
-        # 8. Battery discharge layer (all numeric PV at max AND still importing)
-        if filtered > 0 and batteries:
-            numeric = [a for a in arrays if not a.is_switch]
-            all_maxed = all(
-                self._current_setpoints.get(a.name, a.setpoint_max) >= a.setpoint_max
-                for a in numeric
-            )
-            if all_maxed or not numeric:
-                total_discharge_cap = sum(b.max_discharge_w for b in batteries)
-                if total_discharge_cap > 0:
-                    discharge_w = min(total_discharge_cap, abs(residual))
-                    for battery in batteries:
-                        target = (
-                            discharge_w * battery.max_discharge_w / total_discharge_cap
-                        )
-                        try:
-                            await self._actuators.write_numeric_entity(
-                                battery.setpoint_entity, target
-                            )
-                        except Exception:
-                            _LOGGER.exception(
-                                "Failed to write discharge setpoint for %s",
-                                battery.name,
-                            )
-                        else:
-                            self._current_battery_setpoints[battery.name] = target
+        # 8. Anti-windup: when the PID output moved nothing (all actuators
+        # settling or saturated, no switch toggled), freeze the integrator so
+        # it does not wind up against an unresponsive plant.
+        nothing_absorbed = (
+            abs(pid_output) > 1.0
+            and abs(pid_output - remaining) < 1.0
+            and residual == residual_before_switches
+        )
+        if nothing_absorbed:
+            self._pid.freeze_integrator()
 
         return ControlCycleResult(
             grid_raw_w=grid_raw,
@@ -362,6 +365,17 @@ class ControlEngine:
         except ValueError:
             return None
 
+    def read_power_w(self, entity_id: str) -> float | None:
+        """Read a power sensor in Watts, converting kW/MW/mW units."""
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            value = float(state.state)
+        except ValueError:
+            return None
+        return value * power_unit_factor(state.attributes.get("unit_of_measurement"))
+
     def entity_state(self, entity_id: str) -> str | None:
         """Return entity state string, or None if missing/unavailable/unknown."""
         state = self._hass.states.get(entity_id)
@@ -369,17 +383,189 @@ class ControlEngine:
             return None
         return str(state.state)
 
-    def _read_battery_actual_w(self, batteries: list[BatteryConfig]) -> float:
-        """Return total actual battery power, falling back to commanded setpoint."""
-        total = 0.0
+    # ------------------------------------------------------------------
+    # Battery layer
+    # ------------------------------------------------------------------
+
+    def _read_battery_states(self, batteries: list[BatteryConfig]) -> BatteryState:
+        """Read measured battery power and SoC-limited capacities.
+
+        Measured power falls back to the commanded setpoint when the sensor
+        is unavailable.  SoC at/above max_soc zeroes the charge capacity;
+        SoC at/below min_soc zeroes the discharge capacity.
+        """
+        state = BatteryState()
         for battery in batteries:
-            actual = self.read_sensor_safe(battery.sensor_entity)
-            total += (
-                actual
-                if actual is not None
-                else self._current_battery_setpoints.get(battery.name, 0.0)
+            actual = self.read_power_w(battery.sensor_entity)
+            if actual is None:
+                actual = self._current_battery_setpoints.get(battery.name, 0.0)
+            state.actuals[battery.name] = actual
+
+            soc = (
+                self.read_sensor_safe(battery.soc_sensor_entity)
+                if battery.soc_sensor_entity
+                else None
             )
-        return total
+            state.charge_caps[battery.name] = (
+                0.0
+                if soc is not None and soc >= battery.max_soc
+                else battery.max_charge_w
+            )
+            state.discharge_caps[battery.name] = (
+                0.0
+                if soc is not None and soc <= battery.min_soc
+                else battery.max_discharge_w
+            )
+        return state
+
+    def _discharge_allowed(
+        self, arrays: list[ArrayConfig], loads: list[LoadConfig]
+    ) -> bool:
+        """Battery discharge is the last resort: PV at max and loads off/min."""
+        numeric_arrays = [a for a in arrays if not a.is_switch]
+        arrays_maxed = all(
+            self._current_setpoints.get(a.name, a.setpoint_max) >= a.setpoint_max
+            for a in numeric_arrays
+        )
+        loads_off = all(
+            self._current_load_setpoints.get(ld.name, 0.0)
+            <= (0.0 if ld.is_switch else ld.setpoint_min)
+            for ld in loads
+        )
+        return arrays_maxed and loads_off
+
+    def _pv_recovery_w(
+        self,
+        arrays: list[ArrayConfig],
+        battery_state: BatteryState,
+        filtered: float,
+        now: float,
+    ) -> float:
+        """Virtual import to reopen curtailed PV while batteries can absorb it.
+
+        Without this, arrays stay curtailed once the battery has backed off
+        export: the grid sits at zero, so the PID never reopens them and the
+        spare charge capacity is wasted.
+        """
+        if not battery_state.actuals:
+            return 0.0
+        # Only when the grid is not already importing beyond the deadband
+        # (real import opens arrays by itself) and not exporting strongly
+        # (the battery layer is still absorbing).
+        if abs(filtered) >= self._deadband_w:
+            return 0.0
+        # Hold off while a battery command is still pending settlement.
+        if any(now < until for until in self._battery_pending_until.values()):
+            return 0.0
+        # Only recover into batteries that actually track their commands —
+        # otherwise a dead battery causes an endless open/curtail limit cycle.
+        target_total = sum(
+            self._current_battery_setpoints.get(name, 0.0)
+            for name in battery_state.actuals
+        )
+        if (
+            abs(target_total - battery_state.total_actual)
+            > PV_RECOVERY_TRACKING_TOLERANCE_W
+        ):
+            return 0.0
+        any_curtailed = any(
+            not a.is_switch
+            and a.name in self._current_setpoints
+            and self._current_setpoints[a.name] < a.setpoint_max
+            and now >= self._settling_until.get(a.name, 0.0)
+            for a in arrays
+        )
+        if not any_curtailed:
+            return 0.0
+        charging_w = max(0.0, -battery_state.total_actual)
+        spare_charge_w = battery_state.total_charge_cap - charging_w
+        if spare_charge_w <= 0.0:
+            return 0.0
+        return min(spare_charge_w, PV_RECOVERY_STEP_W)
+
+    async def _command_batteries(
+        self,
+        filtered: float,
+        now: float,
+        batteries: list[BatteryConfig],
+        battery_state: BatteryState,
+        arrays: list[ArrayConfig],
+        loads: list[LoadConfig],
+    ) -> float:
+        """Incrementally command batteries to absorb the grid error.
+
+        The desired total battery power is the *measured* total plus the grid
+        error (negative = charge), clamped to SoC-limited capacities.
+        Discharge is only allowed as a last resort (PV maxed, loads off).
+
+        Returns the residual grid power for downstream layers: the measured
+        grid minus the commanded-but-not-yet-measured battery response.  The
+        feedforward expires after BATTERY_PENDING_S so a non-responsive
+        battery cannot suppress curtailment indefinitely.
+        """
+        if not batteries:
+            return filtered
+
+        allow_discharge = self._discharge_allowed(arrays, loads)
+        total_charge_cap = battery_state.total_charge_cap
+        total_discharge_cap = (
+            battery_state.total_discharge_cap if allow_discharge else 0.0
+        )
+        desired_total = clamp(
+            battery_state.total_actual + filtered,
+            -total_charge_cap,
+            total_discharge_cap,
+        )
+
+        # Distribute proportionally to per-battery capacity in the active
+        # direction (SoC-limited batteries automatically get a zero share).
+        for battery in batteries:
+            if desired_total < 0 and total_charge_cap > 0:
+                target = (
+                    desired_total
+                    * battery_state.charge_caps[battery.name]
+                    / total_charge_cap
+                )
+            elif desired_total > 0 and total_discharge_cap > 0:
+                target = (
+                    desired_total
+                    * battery_state.discharge_caps[battery.name]
+                    / total_discharge_cap
+                )
+            else:
+                target = 0.0
+
+            # Initialise from the actual entity state on first encounter so an
+            # already-zero battery is not written to needlessly.
+            previous = self._current_battery_setpoints.get(battery.name)
+            if previous is None:
+                state_str = self.entity_state(battery.setpoint_entity)
+                try:
+                    previous = float(state_str) if state_str is not None else 0.0
+                except ValueError:
+                    previous = 0.0
+                self._current_battery_setpoints[battery.name] = previous
+            if abs(target - previous) < BATTERY_WRITE_THRESHOLD_W:
+                continue
+            try:
+                await self._actuators.write_numeric_entity(
+                    battery.setpoint_entity, target
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to write battery setpoint for %s", battery.name
+                )
+                continue
+            self._current_battery_setpoints[battery.name] = target
+            self._battery_pending_until[battery.name] = now + BATTERY_PENDING_S
+
+        pending_w = sum(
+            self._current_battery_setpoints.get(battery.name, 0.0)
+            - battery_state.actuals[battery.name]
+            for battery in batteries
+            if now < self._battery_pending_until.get(battery.name, 0.0)
+        )
+        return filtered - pending_w
 
     async def _distribute_to_numeric_arrays(
         self, delta_w: float, now: float, arrays: list[ArrayConfig]
@@ -470,7 +656,7 @@ class ControlEngine:
         """
         if array.power_sensor_entity is None:
             return True
-        actual = self.read_sensor_safe(array.power_sensor_entity)
+        actual = self.read_power_w(array.power_sensor_entity)
         if actual is None:
             return True
         current_sp = self._current_setpoints.get(array.name, array.setpoint_max)
@@ -519,6 +705,15 @@ class ControlEngine:
                 current = self._current_load_setpoints[load.name]
                 available_w = load.headroom_increase_w(current)
                 if available_w <= 0:
+                    continue
+                # Loads with a minimum active power only turn on when the
+                # surplus covers that minimum — otherwise snapping up to the
+                # minimum would create grid import.
+                if (
+                    load.absolute_min_w is not None
+                    and current * load.w_per_unit < load.absolute_min_w
+                    and -remaining < load.absolute_min_w
+                ):
                     continue
                 take_w = min(available_w, -remaining)
                 delta_units = round(take_w / load.w_per_unit)
@@ -627,8 +822,11 @@ class ControlEngine:
 
     async def _apply_switch_hysteresis(
         self, residual: float, now: float, arrays: list[ArrayConfig]
-    ) -> None:
-        """Turn switch arrays on/off based on residual power."""
+    ) -> float:
+        """Turn switch arrays on/off based on residual power.
+
+        Returns the residual with feedforward applied for each switch action.
+        """
         for array in arrays:
             if not array.is_switch:
                 continue
@@ -649,14 +847,19 @@ class ControlEngine:
 
             if not is_on and residual >= array.switch_on_threshold_w:
                 new_sp = array.setpoint_max
+                residual_delta = -array.max_power_w
             elif is_on and residual <= -array.switch_off_threshold_w:
                 new_sp = array.setpoint_min
+                residual_delta = array.max_power_w
             else:
                 continue
 
             await self._actuators.write_setpoint(array, new_sp)
             self._current_setpoints[array.name] = new_sp
             self._settling_until[array.name] = now + array.switch_debounce_s
+            residual += residual_delta
+
+        return residual
 
     async def _enter_load_safe_state(self, loads: list[LoadConfig]) -> None:
         """Move all loads to a neutral fail-safe state (minimum setpoint / off)."""

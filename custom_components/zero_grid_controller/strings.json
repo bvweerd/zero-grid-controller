@@ -10,12 +10,14 @@
           "grid_export_sensors": "Grid export sensors (power delivered to grid, optional)",
           "deadband_w": "Ignore zone (W)",
           "ewm_alpha": "Signal smoothing (0 = heavy, 1 = none)",
-          "aggressiveness": "Response speed"
+          "aggressiveness": "Response speed",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
           "deadband_w": "Grid swings within ±this value are ignored. Prevents constant micro-adjustments when already close to zero. Start with 20 W.",
           "ewm_alpha": "How quickly the controller reacts to grid changes. Lower = smoother but slower (0.1), higher = faster but jumpier (0.5). Default 0.3 suits most systems.",
-          "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot."
+          "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     },
@@ -102,11 +104,17 @@
             "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_setpoint_entity": "Battery setpoint entity"
+            "battery_setpoint_entity": "Battery setpoint entity",
+            "battery_soc_sensor": "State of charge sensor (optional)",
+            "battery_min_soc": "Minimum state of charge (%)",
+            "battery_max_soc": "Maximum state of charge (%)"
           },
           "data_description": {
             "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
-            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge).",
+            "battery_soc_sensor": "When set, charging stops at the maximum SoC and discharging stops at the minimum SoC.",
+            "battery_min_soc": "Discharging is blocked at or below this state of charge.",
+            "battery_max_soc": "Charging is blocked at or above this state of charge."
           }
         },
         "reconfigure": {
@@ -117,11 +125,17 @@
             "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_setpoint_entity": "Battery setpoint entity"
+            "battery_setpoint_entity": "Battery setpoint entity",
+            "battery_soc_sensor": "State of charge sensor (optional)",
+            "battery_min_soc": "Minimum state of charge (%)",
+            "battery_max_soc": "Maximum state of charge (%)"
           },
           "data_description": {
             "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
-            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge).",
+            "battery_soc_sensor": "When set, charging stops at the maximum SoC and discharging stops at the minimum SoC.",
+            "battery_min_soc": "Discharging is blocked at or below this state of charge.",
+            "battery_max_soc": "Charging is blocked at or above this state of charge."
           }
         }
       },
@@ -210,12 +224,14 @@
           "grid_export_sensors": "Grid export sensors (optional)",
           "deadband_w": "Ignore zone (W)",
           "ewm_alpha": "Signal smoothing (0 = heavy, 1 = none)",
-          "aggressiveness": "Response speed"
+          "aggressiveness": "Response speed",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
           "deadband_w": "Grid swings within ±this value are ignored. Prevents constant micro-adjustments when already close to zero. Start with 20 W.",
           "ewm_alpha": "How quickly the controller reacts to grid changes. Lower = smoother but slower (0.1), higher = faster but jumpier (0.5). Default 0.3 suits most systems.",
-          "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot."
+          "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     }
@@ -264,15 +280,25 @@
       }
     },
     "number": {
-      "ewm_alpha": { "name": "EWM filter alpha" },
-      "deadband_w": { "name": "Deadband (W)" }
+      "ewm_alpha": {
+        "name": "EWM filter alpha"
+      },
+      "deadband_w": {
+        "name": "Deadband (W)"
+      }
     },
     "button": {
-      "reset_pid": { "name": "Reset PID" },
-      "recalibrate": { "name": "Recalibrate all arrays" }
+      "reset_pid": {
+        "name": "Reset PID"
+      },
+      "recalibrate": {
+        "name": "Recalibrate all arrays"
+      }
     },
     "switch": {
-      "controller_enabled": { "name": "Controller enabled" }
+      "controller_enabled": {
+        "name": "Controller enabled"
+      }
     }
   },
   "selector": {
@@ -294,6 +320,12 @@
       "options": {
         "numeric": "Numeric (variable setpoint)",
         "switch": "Switch (fixed power on/off)"
+      }
+    },
+    "failsafe_mode": {
+      "options": {
+        "maximize": "Maximize — PV to full output (self-consumption)",
+        "curtail": "Curtail — PV to minimum (zero-export requirement)"
       }
     }
   },

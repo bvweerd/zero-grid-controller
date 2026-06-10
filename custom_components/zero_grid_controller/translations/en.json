@@ -8,14 +8,16 @@
           "name": "Integration name",
           "grid_import_sensors": "Grid import sensors (power drawn from grid)",
           "grid_export_sensors": "Grid export sensors (power delivered to grid, optional)",
-          "deadband_w": "Deadband (W)",
-          "ewm_alpha": "EWM filter alpha",
-          "aggressiveness": "Control aggressiveness"
+          "deadband_w": "Ignore zone (W)",
+          "ewm_alpha": "Signal smoothing (0 = heavy, 1 = none)",
+          "aggressiveness": "Response speed",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
-          "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
-          "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
-          "aggressiveness": "Controls how aggressively PID gains are set after calibration."
+          "deadband_w": "Grid swings within ±this value are ignored. Prevents constant micro-adjustments when already close to zero. Start with 20 W.",
+          "ewm_alpha": "How quickly the controller reacts to grid changes. Lower = smoother but slower (0.1), higher = faster but jumpier (0.5). Default 0.3 suits most systems.",
+          "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     },
@@ -60,7 +62,7 @@
             "setpoint_max": "Maximum setpoint value"
           },
           "data_description": {
-            "power_sensor_entity": "Per-array power sensor used for 30% to 20% midpoint calibration.",
+            "power_sensor_entity": "Per-array power sensor used to measure inverter response during calibration and to detect cloud shadow.",
             "setpoint_min": "The lowest value the controller will ever write (e.g. 0 % or 0 W).",
             "setpoint_max": "The highest value — full output. Calibration uses this range to measure inverter gain."
           }
@@ -84,7 +86,8 @@
       "error": {
         "min_gte_max": "Minimum setpoint must be less than maximum.",
         "off_gte_on": "Turn-off threshold must be less than turn-on threshold.",
-        "duplicate_name": "This array name is already in use."
+        "duplicate_name": "This array name is already in use.",
+        "name_required": "Array name cannot be empty."
       }
     },
     "battery": {
@@ -101,11 +104,17 @@
             "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_setpoint_entity": "Battery setpoint entity"
+            "battery_setpoint_entity": "Battery setpoint entity",
+            "battery_soc_sensor": "State of charge sensor (optional)",
+            "battery_min_soc": "Minimum state of charge (%)",
+            "battery_max_soc": "Maximum state of charge (%)"
           },
           "data_description": {
             "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
-            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge).",
+            "battery_soc_sensor": "When set, charging stops at the maximum SoC and discharging stops at the minimum SoC.",
+            "battery_min_soc": "Discharging is blocked at or below this state of charge.",
+            "battery_max_soc": "Charging is blocked at or above this state of charge."
           }
         },
         "reconfigure": {
@@ -116,11 +125,17 @@
             "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_setpoint_entity": "Battery setpoint entity"
+            "battery_setpoint_entity": "Battery setpoint entity",
+            "battery_soc_sensor": "State of charge sensor (optional)",
+            "battery_min_soc": "Minimum state of charge (%)",
+            "battery_max_soc": "Maximum state of charge (%)"
           },
           "data_description": {
             "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
-            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge).",
+            "battery_soc_sensor": "When set, charging stops at the maximum SoC and discharging stops at the minimum SoC.",
+            "battery_min_soc": "Discharging is blocked at or below this state of charge.",
+            "battery_max_soc": "Charging is blocked at or above this state of charge."
           }
         }
       },
@@ -168,9 +183,9 @@
             "setpoint_entity": "The number entity the controller writes to adjust load power.",
             "setpoint_min": "Lowest allowed setpoint value (typically 0 = off).",
             "setpoint_max": "Highest allowed setpoint value.",
-            "w_per_unit": "Power change per unit step (e.g. 230 W/A for a single-phase EV charger).",
-            "absolute_min_w": "If set, the load must be fully off or at or above this power. EV chargers that require at least 6 A (1380 W) when on should use this. Leave at 0 to disable.",
-            "settling_time_s": "Seconds to wait after a setpoint change before adjusting again.",
+            "w_per_unit": "Power change per unit step. For an EV charger: 230 W/A (single-phase 230 V) or 690 W/A (three-phase 400 V). For a boiler or other load: measure it or check the manual.",
+            "absolute_min_w": "Minimum power when on. Some EV chargers require at least 6 A (1380 W single-phase) and cannot run below this. Set to that minimum, or leave at 0 if your device can go all the way down to zero.",
+            "settling_time_s": "Seconds to wait after changing the setpoint before adjusting again. Most EV chargers and inverters need 10–30 s to stabilise.",
             "power_sensor_entity": "Optional sensor measuring actual load power for monitoring.",
             "load_priority": "Lower number = higher priority. The highest-priority load absorbs surplus first and is the last to be reduced."
           }
@@ -207,14 +222,16 @@
           "name": "Integration name",
           "grid_import_sensors": "Grid import sensors",
           "grid_export_sensors": "Grid export sensors (optional)",
-          "deadband_w": "Deadband (W)",
-          "ewm_alpha": "EWM filter alpha",
-          "aggressiveness": "Control aggressiveness"
+          "deadband_w": "Ignore zone (W)",
+          "ewm_alpha": "Signal smoothing (0 = heavy, 1 = none)",
+          "aggressiveness": "Response speed",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
-          "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
-          "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
-          "aggressiveness": "Controls how aggressively PID gains are set after calibration."
+          "deadband_w": "Grid swings within ±this value are ignored. Prevents constant micro-adjustments when already close to zero. Start with 20 W.",
+          "ewm_alpha": "How quickly the controller reacts to grid changes. Lower = smoother but slower (0.1), higher = faster but jumpier (0.5). Default 0.3 suits most systems.",
+          "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     }
@@ -228,7 +245,7 @@
         "name": "Grid power (filtered)"
       },
       "pid_output_w": {
-        "name": "PID output"
+        "name": "Control signal (W)"
       },
       "status": {
         "name": "Controller status",
@@ -246,6 +263,15 @@
       },
       "load_setpoint": {
         "name": "Setpoint"
+      },
+      "calibration_status": {
+        "name": "Calibration status",
+        "state": {
+          "idle": "Idle",
+          "running": "Running",
+          "done": "Done",
+          "failed": "Failed"
+        }
       }
     },
     "binary_sensor": {
@@ -254,15 +280,25 @@
       }
     },
     "number": {
-      "ewm_alpha": { "name": "EWM filter alpha" },
-      "deadband_w": { "name": "Deadband (W)" }
+      "ewm_alpha": {
+        "name": "EWM filter alpha"
+      },
+      "deadband_w": {
+        "name": "Deadband (W)"
+      }
     },
     "button": {
-      "reset_pid": { "name": "Reset PID" },
-      "recalibrate": { "name": "Recalibrate all arrays" }
+      "reset_pid": {
+        "name": "Reset PID"
+      },
+      "recalibrate": {
+        "name": "Recalibrate all arrays"
+      }
     },
     "switch": {
-      "controller_enabled": { "name": "Controller enabled" }
+      "controller_enabled": {
+        "name": "Controller enabled"
+      }
     }
   },
   "selector": {
@@ -284,6 +320,12 @@
       "options": {
         "numeric": "Numeric (variable setpoint)",
         "switch": "Switch (fixed power on/off)"
+      }
+    },
+    "failsafe_mode": {
+      "options": {
+        "maximize": "Maximize — PV to full output (self-consumption)",
+        "curtail": "Curtail — PV to minimum (zero-export requirement)"
       }
     }
   },

@@ -10,12 +10,14 @@
           "grid_export_sensors": "Grid exportsensoren (vermogen geleverd aan net, optioneel)",
           "deadband_w": "Negeringszone (W)",
           "ewm_alpha": "Signaalfiltering (0 = zwaar, 1 = geen)",
-          "aggressiveness": "Reactiesnelheid"
+          "aggressiveness": "Reactiesnelheid",
+          "failsafe_mode": "Failsafe-gedrag"
         },
         "data_description": {
           "deadband_w": "Gridschommelingen binnen ±deze waarde worden genegeerd. Voorkomt constante micro-aanpassingen als het al bijna nul is. Begin met 20 W.",
           "ewm_alpha": "Hoe snel de controller reageert op gridwijzigingen. Lager = vloeiender maar trager (0,1), hoger = sneller maar grilliger (0,5). Standaard 0,3 is geschikt voor de meeste systemen.",
-          "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven."
+          "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven.",
+          "failsafe_mode": "Wat de regelaar met de PV-limieten doet als de netmeting niet beschikbaar is of de regelaar is uitgeschakeld. Maximaliseren = PV naar vol vermogen (eigen verbruik). Begrenzen = PV naar minimum (nul-export-verplichting)."
         }
       }
     },
@@ -101,11 +103,17 @@
             "battery_sensor": "Batterijvermogensensor",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
             "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
-            "battery_setpoint_entity": "Batterij setpoint-entiteit"
+            "battery_setpoint_entity": "Batterij setpoint-entiteit",
+            "battery_soc_sensor": "Laadtoestand-sensor (optioneel)",
+            "battery_min_soc": "Minimale laadtoestand (%)",
+            "battery_max_soc": "Maximale laadtoestand (%)"
           },
           "data_description": {
             "battery_sensor": "Tekenteken: negatief = laden, positief = ontladen.",
-            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen)."
+            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen).",
+            "battery_soc_sensor": "Indien ingesteld stopt laden bij de maximale laadtoestand en ontladen bij de minimale laadtoestand.",
+            "battery_min_soc": "Ontladen wordt geblokkeerd op of onder deze laadtoestand.",
+            "battery_max_soc": "Laden wordt geblokkeerd op of boven deze laadtoestand."
           }
         },
         "reconfigure": {
@@ -116,11 +124,17 @@
             "battery_sensor": "Batterijvermogensensor",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
             "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
-            "battery_setpoint_entity": "Batterij setpoint-entiteit"
+            "battery_setpoint_entity": "Batterij setpoint-entiteit",
+            "battery_soc_sensor": "Laadtoestand-sensor (optioneel)",
+            "battery_min_soc": "Minimale laadtoestand (%)",
+            "battery_max_soc": "Maximale laadtoestand (%)"
           },
           "data_description": {
             "battery_sensor": "Tekenteken: negatief = laden, positief = ontladen.",
-            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen)."
+            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen).",
+            "battery_soc_sensor": "Indien ingesteld stopt laden bij de maximale laadtoestand en ontladen bij de minimale laadtoestand.",
+            "battery_min_soc": "Ontladen wordt geblokkeerd op of onder deze laadtoestand.",
+            "battery_max_soc": "Laden wordt geblokkeerd op of boven deze laadtoestand."
           }
         }
       },
@@ -209,12 +223,14 @@
           "grid_export_sensors": "Grid exportsensoren (optioneel)",
           "deadband_w": "Negeringszone (W)",
           "ewm_alpha": "Signaalfiltering (0 = zwaar, 1 = geen)",
-          "aggressiveness": "Reactiesnelheid"
+          "aggressiveness": "Reactiesnelheid",
+          "failsafe_mode": "Failsafe-gedrag"
         },
         "data_description": {
           "deadband_w": "Gridschommelingen binnen ±deze waarde worden genegeerd. Voorkomt constante micro-aanpassingen als het al bijna nul is. Begin met 20 W.",
           "ewm_alpha": "Hoe snel de controller reageert op gridwijzigingen. Lager = vloeiender maar trager (0,1), hoger = sneller maar grilliger (0,5). Standaard 0,3 is geschikt voor de meeste systemen.",
-          "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven."
+          "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven.",
+          "failsafe_mode": "Wat de regelaar met de PV-limieten doet als de netmeting niet beschikbaar is of de regelaar is uitgeschakeld. Maximaliseren = PV naar vol vermogen (eigen verbruik). Begrenzen = PV naar minimum (nul-export-verplichting)."
         }
       }
     }
@@ -263,15 +279,25 @@
       }
     },
     "number": {
-      "ewm_alpha": { "name": "EWM-filter alpha" },
-      "deadband_w": { "name": "Dodeband (W)" }
+      "ewm_alpha": {
+        "name": "EWM-filter alpha"
+      },
+      "deadband_w": {
+        "name": "Dodeband (W)"
+      }
     },
     "button": {
-      "reset_pid": { "name": "PID resetten" },
-      "recalibrate": { "name": "Alle arrays opnieuw kalibreren" }
+      "reset_pid": {
+        "name": "PID resetten"
+      },
+      "recalibrate": {
+        "name": "Alle arrays opnieuw kalibreren"
+      }
     },
     "switch": {
-      "controller_enabled": { "name": "Controller ingeschakeld" }
+      "controller_enabled": {
+        "name": "Controller ingeschakeld"
+      }
     }
   },
   "selector": {
@@ -293,6 +319,12 @@
       "options": {
         "numeric": "Numeriek (variabel setpoint)",
         "switch": "Schakelaar (vast vermogen aan/uit)"
+      }
+    },
+    "failsafe_mode": {
+      "options": {
+        "maximize": "Maximaliseren — PV naar vol vermogen (eigen verbruik)",
+        "curtail": "Begrenzen — PV naar minimum (nul-export-verplichting)"
       }
     }
   },
