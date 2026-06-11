@@ -318,10 +318,26 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         # → positive output when importing (open PV), negative when exporting (curtail PV)
         pid_output = self._pid.compute(-residual, dt)
 
-        await self._distribute_to_numeric_arrays(pid_output, now)
+        remaining = await self._distribute_to_numeric_arrays(pid_output, now)
+        array_absorbed_w = pid_output - remaining
 
-        # 7b. Switch arrays: hysteresis on residual
-        await self._apply_switch_hysteresis(residual, now)
+        # 7b. Switch arrays: hysteresis on the residual with the numeric-array
+        # correction fed forward, so a curtailment made this cycle is not also
+        # compensated by toggling a switch array (double action).
+        residual_before_switches = residual - array_absorbed_w
+        residual_after = await self._apply_switch_hysteresis(
+            residual_before_switches, now
+        )
+
+        # 8. Anti-windup: when the PID output moved nothing (all arrays
+        # settling or saturated, no switch toggled), freeze the integrator so
+        # it does not wind up against an unresponsive plant.
+        if (
+            abs(pid_output) > 1.0
+            and abs(array_absorbed_w) < 1.0
+            and residual_after == residual_before_switches
+        ):
+            self._pid.freeze_integrator()
 
         return ZGCResult(
             grid_raw_w=grid_raw,
@@ -538,15 +554,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         )
         return filtered - pending_w
 
-    async def _distribute_to_numeric_arrays(self, delta_w: float, now: float) -> None:
-        """Distribute PID output across numeric arrays by available headroom."""
+    async def _distribute_to_numeric_arrays(self, delta_w: float, now: float) -> float:
+        """Distribute PID output across numeric arrays by available headroom.
+
+        Returns the remaining unabsorbed delta_w.
+        """
         active = [
             a
             for a in self.arrays
             if not a.is_switch and now >= self._settling_until.get(a.name, 0.0)
         ]
         if not active or delta_w == 0:
-            return
+            return delta_w
 
         # Initialise setpoints from actual entity state on first encounter so
         # headroom is computed from the real position, not assumed setpoint_max.
@@ -575,8 +594,9 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         }
         total_headroom = sum(headrooms.values())
         if total_headroom <= 0:
-            return
+            return delta_w
 
+        total_absorbed_w = 0.0
         for array in active:
             if array.w_per_unit == 0:
                 continue
@@ -599,6 +619,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 continue
 
             await self._actuators.write_setpoint(array, new_sp)
+            total_absorbed_w += (new_sp - current) * array.w_per_unit
             self._current_setpoints[array.name] = new_sp
             settle_s = (
                 (array.settling_up_s or array.settling_time_s)
@@ -606,6 +627,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 else (array.settling_down_s or array.settling_time_s)
             )
             self._settling_until[array.name] = now + settle_s
+
+        return delta_w - total_absorbed_w
 
     def _can_open(self, array: ArrayConfig) -> bool:
         """Return True if the array may increase its setpoint.
@@ -623,8 +646,11 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         current_sp = self._current_setpoints.get(array.name, array.setpoint_max)
         return actual >= (current_sp - 1) * array.w_per_unit
 
-    async def _apply_switch_hysteresis(self, residual: float, now: float) -> None:
-        """Turn switch arrays on/off based on residual power."""
+    async def _apply_switch_hysteresis(self, residual: float, now: float) -> float:
+        """Turn switch arrays on/off based on residual power.
+
+        Returns the residual with feedforward applied for each switch action.
+        """
         for array in self.arrays:
             if not array.is_switch:
                 continue
@@ -650,15 +676,20 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             if not is_on and residual >= array.switch_on_threshold_w:
                 # Importing and above threshold → turn on to generate more
                 new_sp = array.setpoint_max
+                residual_delta = -array.max_power_w
             elif is_on and residual <= -array.switch_off_threshold_w:
                 # Exporting and below threshold → turn off to stop generating
                 new_sp = array.setpoint_min
+                residual_delta = array.max_power_w
             else:
                 continue
 
             await self._actuators.write_setpoint(array, new_sp)
             self._current_setpoints[array.name] = new_sp
             self._settling_until[array.name] = now + array.switch_debounce_s
+            residual += residual_delta
+
+        return residual
 
     async def _persist_calibration_results(
         self, results: list[CalibrationResult]
