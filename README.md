@@ -119,12 +119,48 @@ Go to the integration card and choose **Add entry → Battery**:
 - **Maximum charge power**: maximum W the battery can absorb.
 - **Maximum discharge power**: maximum W the battery can deliver.
 - **Battery setpoint entity**: the `number.*` entity to command the battery target power.
+- **Optimizer schedule sensor** (optional): a sensor that provides a pre-planned battery setpoint from an external optimizer (e.g. [battery_controller](https://github.com/bvweerd/battery_controller)). See [Using an external optimizer](#using-an-external-optimizer) below.
+
+#### Battery control modes
+
+| Configuration | Behaviour |
+|---------------|-----------|
+| No schedule sensor | **Reactive**: charges when exporting (grid < 0), discharges as a last resort when all PV arrays are at maximum and the grid is still importing. |
+| Schedule sensor configured | **Scheduled + corrected**: follows the optimizer's recommended setpoint as a feed-forward target; the real-time grid error is added on top as a proportional correction. |
+
+#### Using an external optimizer
+
+When a schedule sensor is configured, the battery target is computed as:
+
+```
+target_w = clamp(schedule_w + grid_correction_w, −max_charge, +max_discharge)
+```
+
+- **`schedule_w`**: the optimizer's planned setpoint (e.g. −500 W = charge at 500 W).
+- **`grid_correction_w`**: a real-time adjustment proportional to the filtered grid error, so short-term PV fluctuations or unexpected consumption peaks are compensated without waiting for the next optimizer cycle.
+- The result is clamped to the configured max charge / discharge limits.
+
+**Sign convention**: the schedule sensor must use the same sign convention as the setpoint entity — **negative = charging, positive = discharging**. Verify this matches what your optimizer publishes before enabling.
 
 ---
 
 ## Adjusting settings
 
 Go to **Settings → Devices & Services → Zero Grid Controller → Configure**.
+
+### Control mode
+
+| Mode | Behaviour |
+|------|-----------|
+| **Zero grid** (default) | Keeps net grid at 0 W — prevents both import and export. |
+| **Zero import** | Allows export freely; only activates the controller to prevent import. Useful when selling is always OK but buying is not. |
+| **Zero export** | Allows import freely; only activates the controller to prevent export. Useful when net-metering rules prohibit export. |
+| **Maximize export** | Immediately sets all PV arrays to maximum output, turns controllable loads off, and discharges batteries at full rate. Use when feed-in tariffs are high. No PID — static positions. |
+| **Maximize import** | Immediately sets all PV arrays to minimum output (off), turns controllable loads on at maximum, and charges batteries at full rate. Use when energy prices are negative. No PID — static positions. |
+
+Switching modes takes effect on the next 5-second control cycle.
+
+### Control aggressiveness
 
 The **Control aggressiveness** setting has three positions:
 
@@ -180,7 +216,7 @@ Calibration confidence is shown in the diagnostics analyzer. Arrays showing `est
 | `sensor.*_grid_raw_w` | Unfiltered grid power (W) |
 | `sensor.*_grid_filtered_w` | EWM-filtered grid power (W) |
 | `sensor.*_pid_output_w` | PID output / control signal (W) |
-| `sensor.*_status` | Controller status: `active` / `deadband` / `disabled` |
+| `sensor.*_status` | Controller status: `active` / `deadband` / `disabled` / `idle_import_ok` / `idle_export_ok` / `maximizing_export` / `maximizing_import` |
 | `sensor.*_calibration_status` | Calibration lifecycle: `idle` / `running` / `done` / `failed` |
 | `number.*_deadband_w` | Deadband (W) |
 | `number.*_ewm_alpha` | EWM filter alpha |
@@ -253,7 +289,9 @@ Set an **Enable switch** in the main settings. Turning the switch off puts the c
 
 **When does the battery discharge?**
 
-Only when all numeric PV arrays are already at their maximum setpoint and the grid is still importing. The battery is the last resort for import, not the first.
+Without an optimizer schedule sensor: only when all numeric PV arrays are already at their maximum setpoint and the grid is still importing — the battery is the last resort, not the first.
+
+With an optimizer schedule sensor: the battery follows the planned setpoint at all times and adds a real-time correction for short-term grid fluctuations. Charge and discharge are determined by the optimizer's schedule, not purely by instantaneous grid state.
 
 ---
 

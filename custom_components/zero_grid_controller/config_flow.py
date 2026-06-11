@@ -19,8 +19,10 @@ from .const import (
     CONF_ARRAY_NAME,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
+    CONF_BATTERY_SCHEDULE_SENSOR,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_CONTROL_MODE,
     CONF_DEADBAND_W,
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
@@ -44,6 +46,7 @@ from .const import (
     DEFAULT_AGGRESSIVENESS,
     DEFAULT_BATTERY_MAX_CHARGE_W,
     DEFAULT_BATTERY_MAX_DISCHARGE_W,
+    DEFAULT_CONTROL_MODE,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_LOAD_DEBOUNCE_S,
@@ -62,6 +65,7 @@ from .const import (
     OUTPUT_TYPE_PERCENT,
     OUTPUT_TYPE_SWITCH,
     OUTPUT_TYPE_WATT,
+    ControllerMode,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,6 +120,23 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
                     "select": {
                         "options": ["cautious", "normal", "fast"],
                         "translation_key": "aggressiveness",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_CONTROL_MODE,
+                default=defaults.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE),
+            ): selector(
+                {
+                    "select": {
+                        "options": [
+                            ControllerMode.ZERO_GRID,
+                            ControllerMode.ZERO_IMPORT,
+                            ControllerMode.ZERO_EXPORT,
+                            ControllerMode.MAXIMIZE_EXPORT,
+                            ControllerMode.MAXIMIZE_IMPORT,
+                        ],
+                        "translation_key": "control_mode",
                     }
                 }
             ),
@@ -267,6 +288,9 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_BATTERY_SETPOINT_ENTITY,
                 default=defaults.get(CONF_BATTERY_SETPOINT_ENTITY, ""),
             ): selector({"entity": {"domain": ["number", "input_number"]}}),
+            vol.Optional(CONF_BATTERY_SCHEDULE_SENSOR): selector(
+                {"entity": {"domain": "sensor", "device_class": "power"}}
+            ),
         }
     )
 

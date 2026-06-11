@@ -25,6 +25,7 @@ from .const import (
     CALIBRATION_CONFIDENCE_MEASURED,
     CONF_AGGRESSIVENESS,
     CONF_CALIBRATION_CONFIDENCE,
+    CONF_CONTROL_MODE,
     CONF_CONTROLLER_ENABLED,
     CONF_DEADBAND_W,
     CONF_DERIVED_MAX_POWER_W,
@@ -41,14 +42,15 @@ from .const import (
     CONF_W_PER_UNIT,
     CONTROL_INTERVAL_S,
     DEFAULT_AGGRESSIVENESS,
+    DEFAULT_CONTROL_MODE,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_KD,
     DEFAULT_KI,
-    DEFAULT_KP,
     DEFAULT_OUTPUT_MAX_W,
     DOMAIN,
     LOAD_SUBENTRY_TYPE,
+    ControllerMode,
 )
 from .control_engine import ControlCycleResult, ControlEngine
 from .load import load_config_from_subentry
@@ -103,29 +105,8 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         """Initialise / re-initialise all state from the config entry."""
         data = {**entry.data, **entry.options}
 
-        kp = float(data.get(CONF_KP, DEFAULT_KP))
-        ki = float(data.get(CONF_KI, DEFAULT_KI))
-        kd = float(data.get(CONF_KD, DEFAULT_KD))
-        output_max = float(data.get(CONF_OUTPUT_MAX_W, DEFAULT_OUTPUT_MAX_W))
-
-        new_pid = PIDController(
-            kp,
-            ki,
-            kd,
-            setpoint=0.0,
-            output_min=-output_max,
-            output_max=output_max,
-        )
-        self._ewm_alpha = float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
-        self._deadband_w = float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
-        self._enabled: bool = bool(data.get(CONF_CONTROLLER_ENABLED, True))
-        self._aggressiveness: str = data.get(
-            CONF_AGGRESSIVENESS, DEFAULT_AGGRESSIVENESS
-        )
-
-        self._import_sensors: list[str] = data.get(CONF_GRID_IMPORT_SENSORS, [])
-        self._export_sensors: list[str] = data.get(CONF_GRID_EXPORT_SENSORS, [])
-
+        # 1. Build subentry configs first — needed to derive output_max from
+        #    calibrated PV capacity when the user has not set it explicitly.
         self.arrays = []
         self.batteries = []
         self.loads = []
@@ -144,6 +125,65 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                     load_config_from_subentry(subentry.subentry_id, subentry.data)
                 )
 
+        # 2. PID gains: explicit config (written by calibration) takes priority;
+        #    fall back to aggressiveness-derived values so the UI setting has an
+        #    immediate effect even before calibration is run.
+        self._aggressiveness: str = data.get(
+            CONF_AGGRESSIVENESS, DEFAULT_AGGRESSIVENESS
+        )
+        if CONF_KP in data:
+            kp = float(data[CONF_KP])
+            ki = float(data.get(CONF_KI, DEFAULT_KI))
+        else:
+            factor = AGGRESSIVENESS_FACTORS.get(self._aggressiveness, 1.0)
+            kp = round(factor, 4)
+            ki = round(kp * AGGRESSIVENESS_KI_RATIO, 5)
+        kd = float(data.get(CONF_KD, DEFAULT_KD))
+
+        # 3. output_max: explicit config > sum of calibrated PV capacity > global default.
+        #    Matching output_max to actual PV capacity keeps the anti-windup limit
+        #    within the physically achievable range instead of the 10 kW default.
+        if CONF_OUTPUT_MAX_W in data:
+            output_max = float(data[CONF_OUTPUT_MAX_W])
+        else:
+            measured_pv_w = sum(
+                a.derived_max_power_w
+                for a in self.arrays
+                if not a.is_switch and a.derived_max_power_w is not None
+            )
+            if measured_pv_w > 0:
+                output_max = measured_pv_w
+                _LOGGER.debug(
+                    "output_max derived from calibrated PV capacity: %.0f W", output_max
+                )
+            else:
+                output_max = DEFAULT_OUTPUT_MAX_W
+
+        new_pid = PIDController(
+            kp,
+            ki,
+            kd,
+            setpoint=0.0,
+            output_min=-output_max,
+            output_max=output_max,
+        )
+        self._ewm_alpha = float(data.get(CONF_EWM_ALPHA, DEFAULT_EWM_ALPHA))
+        self._deadband_w = float(data.get(CONF_DEADBAND_W, DEFAULT_DEADBAND_W))
+        self._enabled: bool = bool(data.get(CONF_CONTROLLER_ENABLED, True))
+        try:
+            self._mode: ControllerMode = ControllerMode(
+                data.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE)
+            )
+        except ValueError:
+            _LOGGER.warning(
+                "Invalid control_mode value %r — falling back to zero_grid",
+                data.get(CONF_CONTROL_MODE),
+            )
+            self._mode = ControllerMode.ZERO_GRID
+
+        self._import_sensors: list[str] = data.get(CONF_GRID_IMPORT_SENSORS, [])
+        self._export_sensors: list[str] = data.get(CONF_GRID_EXPORT_SENSORS, [])
+
         if not hasattr(self, "_engine"):
             # First initialization — create the engine
             self._engine: ControlEngine = ControlEngine(
@@ -152,10 +192,13 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
                 actuators=self._actuators,
                 ewm_alpha=self._ewm_alpha,
                 deadband_w=self._deadband_w,
+                mode=self._mode,
             )
         else:
             # Reload — update params, preserve all setpoint and filter state
-            self._engine.update_params(new_pid, self._ewm_alpha, self._deadband_w)
+            self._engine.update_params(
+                new_pid, self._ewm_alpha, self._deadband_w, self._mode
+            )
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -266,6 +309,21 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
     def set_enabled(self, value: bool) -> None:
         """Enable or disable the controller."""
         self._enabled = value
+
+    @property
+    def mode(self) -> ControllerMode:
+        """Return the current control mode."""
+        return self._mode
+
+    def set_mode(self, mode: ControllerMode) -> None:
+        """Change the control mode immediately."""
+        self._mode = mode
+        self._engine.update_params(
+            self._engine.pid,
+            self._ewm_alpha,
+            self._deadband_w,
+            mode,
+        )
 
     def reset_pid(self) -> None:
         """Reset the PID controller state."""

@@ -75,5 +75,6 @@ async def async_get_config_entry_diagnostics(
             "ewm_alpha": coordinator._ewm_alpha,
             "aggressiveness": coordinator._aggressiveness,
             "controller_enabled": coordinator._enabled,
+            "control_mode": coordinator._mode,
         },
     }

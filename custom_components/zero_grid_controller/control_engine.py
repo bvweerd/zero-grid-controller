@@ -17,6 +17,7 @@ from .const import (
     STATUS_ACTIVE,
     STATUS_DEADBAND,
     STATUS_DISABLED,
+    ControllerMode,
     ControllerStatus,
 )
 from .load import LoadConfig
@@ -55,12 +56,14 @@ class ControlEngine:
         actuators: ActuatorManager,
         ewm_alpha: float,
         deadband_w: float,
+        mode: ControllerMode = ControllerMode.ZERO_GRID,
     ) -> None:
         self._hass = hass
         self._pid = pid
         self._actuators = actuators
         self._ewm_alpha = ewm_alpha
         self._deadband_w = deadband_w
+        self._mode = mode
 
         self._filtered_w: float | None = None
         self._filter_sample_count: int = 0
@@ -106,11 +109,13 @@ class ControlEngine:
         pid: PIDController,
         ewm_alpha: float,
         deadband_w: float,
+        mode: ControllerMode = ControllerMode.ZERO_GRID,
     ) -> None:
         """Update PID and filter parameters, preserving all state dicts."""
         self._pid = pid
         self._ewm_alpha = ewm_alpha
         self._deadband_w = deadband_w
+        self._mode = mode
 
     def restore_filter_state(
         self,
@@ -224,6 +229,32 @@ class ControlEngine:
                 load_setpoints=dict(self._current_load_setpoints),
             )
 
+        # 4b. Maximize modes — static actuator positions, no PID
+        if self._mode == ControllerMode.MAXIMIZE_EXPORT:
+            self._pid.reset()
+            await self._set_maximize_export(arrays, loads, batteries)
+            return ControlCycleResult(
+                grid_raw_w=grid_raw,
+                grid_filtered_w=filtered,
+                pid_output_w=0.0,
+                status=ControllerStatus.MAXIMIZING_EXPORT,
+                setpoints=dict(self._current_setpoints),
+                load_setpoints=dict(self._current_load_setpoints),
+                battery_setpoints=dict(self._current_battery_setpoints),
+            )
+        if self._mode == ControllerMode.MAXIMIZE_IMPORT:
+            self._pid.reset()
+            await self._set_maximize_import(arrays, loads, batteries)
+            return ControlCycleResult(
+                grid_raw_w=grid_raw,
+                grid_filtered_w=filtered,
+                pid_output_w=0.0,
+                status=ControllerStatus.MAXIMIZING_IMPORT,
+                setpoints=dict(self._current_setpoints),
+                load_setpoints=dict(self._current_load_setpoints),
+                battery_setpoints=dict(self._current_battery_setpoints),
+            )
+
         # 5. Deadband check
         if abs(filtered) < self._deadband_w:
             self._pid.freeze_integrator()
@@ -237,12 +268,66 @@ class ControlEngine:
                 load_setpoints=dict(self._current_load_setpoints),
             )
 
-        # 6. Battery charge layer (export: grid < 0 → charge batteries)
-        if filtered < 0 and batteries:
-            total_charge_cap = sum(b.max_charge_w for b in batteries)
+        # 5b. Mode idle check — only activate PID on the "forbidden" side
+        skip_pid = False
+        cycle_status: ControllerStatus = STATUS_ACTIVE
+        if self._mode == ControllerMode.ZERO_IMPORT and filtered < -self._deadband_w:
+            # Exporting: allowed direction — idle, battery charge layer still runs below
+            self._pid.freeze_integrator()
+            skip_pid = True
+            cycle_status = ControllerStatus.IDLE_EXPORT_OK
+        elif self._mode == ControllerMode.ZERO_EXPORT and filtered > self._deadband_w:
+            # Importing: allowed direction — idle, battery discharge layer still runs below
+            self._pid.freeze_integrator()
+            skip_pid = True
+            cycle_status = ControllerStatus.IDLE_IMPORT_OK
+
+        # 6. Battery control: scheduled vs reactive
+        # Batteries with a schedule_sensor_entity follow an external optimizer
+        # (e.g. battery_controller) with a real-time grid correction on top.
+        # Batteries without a schedule sensor use the reactive charge/discharge layers.
+        scheduled_batteries = [b for b in batteries if b.schedule_sensor_entity]
+        reactive_batteries = [b for b in batteries if not b.schedule_sensor_entity]
+
+        if scheduled_batteries:
+            total_scheduled_cap = sum(b.max_charge_w for b in scheduled_batteries)
+            for battery in scheduled_batteries:
+                schedule_sensor = battery.schedule_sensor_entity
+                assert (
+                    schedule_sensor is not None
+                )  # guaranteed by list comprehension above
+                schedule_w = self.read_sensor_safe(schedule_sensor) or 0.0
+                # Proportional reactive correction: adjusts schedule up/down based on
+                # the current grid error.  filtered > 0 → importing → push toward
+                # discharge (positive correction); filtered < 0 → exporting → push
+                # toward charge (negative correction).
+                correction = (
+                    filtered * (battery.max_charge_w / total_scheduled_cap)
+                    if total_scheduled_cap > 0
+                    else 0.0
+                )
+                target = clamp(
+                    schedule_w + correction,
+                    -battery.max_charge_w,
+                    battery.max_discharge_w,
+                )
+                try:
+                    await self._actuators.write_numeric_entity(
+                        battery.setpoint_entity, target
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "Failed to write schedule setpoint for %s", battery.name
+                    )
+                else:
+                    self._current_battery_setpoints[battery.name] = target
+
+        # 6b. Reactive charge layer (export: grid < 0 → charge reactive batteries)
+        if filtered < 0 and reactive_batteries:
+            total_charge_cap = sum(b.max_charge_w for b in reactive_batteries)
             if total_charge_cap > 0:
                 charge_w = min(total_charge_cap, abs(filtered))
-                for battery in batteries:
+                for battery in reactive_batteries:
                     target = -(charge_w * battery.max_charge_w / total_charge_cap)
                     try:
                         await self._actuators.write_numeric_entity(
@@ -255,9 +340,9 @@ class ControlEngine:
                     else:
                         self._current_battery_setpoints[battery.name] = target
 
-        elif filtered > 0 and batteries:
-            # Reset charge targets when importing
-            for battery in batteries:
+        elif filtered > 0 and reactive_batteries:
+            # Reset charge targets for reactive batteries when importing
+            for battery in reactive_batteries:
                 if self._current_battery_setpoints.get(battery.name, 0.0) < 0:
                     try:
                         await self._actuators.write_numeric_entity(
@@ -270,59 +355,97 @@ class ControlEngine:
                     else:
                         self._current_battery_setpoints[battery.name] = 0.0
 
-        # 7. Residual after battery pre-compensation — use actual measured power
-        residual = filtered - self._read_battery_actual_w(batteries)
+        # 7. PID + actuator distribution (skipped in one-sided idle modes)
+        pid_output = 0.0
+        if not skip_pid:
+            # 7. Residual after battery pre-compensation — use actual measured power
+            residual = filtered - self._read_battery_actual_w(batteries)
 
-        # 7a. PID on residual
-        # Negate: positive output when importing (open PV / reduce load)
-        pid_output = self._pid.compute(-residual, dt)
+            # 7a. PID on residual
+            # Negate: positive output when importing (open PV / reduce load)
+            pid_output = self._pid.compute(-residual, dt)
 
-        # 7b. Numeric correction
-        _load_sp_before = {
-            ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
-            for ld in loads
-            if not ld.is_switch
-        }
-        _load_w_per_unit = {ld.name: ld.w_per_unit for ld in loads if not ld.is_switch}
+            # Back-calculation anti-windup (sign contradiction):
+            # When the integral has wound up so far that it opposes the actual
+            # grid direction, immediately reset it and use the P-only output for
+            # this cycle.  Threshold of 3×deadband avoids triggering on normal
+            # near-zero oscillation.
+            if abs(pid_output) > 3 * self._deadband_w:
+                wrong_direction = (pid_output < 0 and filtered > self._deadband_w) or (
+                    pid_output > 0 and filtered < -self._deadband_w
+                )
+                if wrong_direction:
+                    p_only = self._pid.kp * residual
+                    _LOGGER.info(
+                        "Integrator wind-up corrected: output %.0f W → %.0f W"
+                        " (grid %.1f W)",
+                        pid_output,
+                        p_only,
+                        filtered,
+                    )
+                    self._pid.set_integral(0.0)
+                    pid_output = p_only
 
-        if pid_output < 0:
-            # Exporting surplus → increase loads, then curtail arrays
-            remaining = await self._distribute_to_numeric_loads(pid_output, now, loads)
-            await self._distribute_to_numeric_arrays(remaining, now, arrays)
-        else:
-            # Importing deficit → open arrays, then reduce loads
-            remaining = await self._distribute_to_numeric_arrays(
-                pid_output, now, arrays
+            # 7b. Numeric correction
+            _load_sp_before = {
+                ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
+                for ld in loads
+                if not ld.is_switch
+            }
+            _load_w_per_unit = {
+                ld.name: ld.w_per_unit for ld in loads if not ld.is_switch
+            }
+
+            if pid_output < 0:
+                # Exporting surplus → increase loads, then curtail arrays
+                after_loads = await self._distribute_to_numeric_loads(
+                    pid_output, now, loads
+                )
+                final_remaining = await self._distribute_to_numeric_arrays(
+                    after_loads, now, arrays
+                )
+            else:
+                # Importing deficit → open arrays, then reduce loads
+                after_arrays = await self._distribute_to_numeric_arrays(
+                    pid_output, now, arrays
+                )
+                final_remaining = await self._distribute_to_numeric_loads(
+                    after_arrays, now, loads
+                )
+
+            # Saturation anti-windup: freeze integrator when actuators cannot
+            # absorb the requested correction (settling timers or at physical
+            # limits).  Prevents further wind-up while the system is saturated.
+            if abs(pid_output) > 1.0 and abs(final_remaining) >= 0.95 * abs(pid_output):
+                self._pid.freeze_integrator()
+
+            # Actual watts absorbed by numeric loads in this cycle
+            load_absorbed_w = sum(
+                (self._current_load_setpoints.get(name, before) - before)
+                * _load_w_per_unit[name]
+                for name, before in _load_sp_before.items()
             )
-            await self._distribute_to_numeric_loads(remaining, now, loads)
 
-        # Actual watts absorbed by numeric loads in this cycle
-        load_absorbed_w = sum(
-            (self._current_load_setpoints.get(name, before) - before)
-            * _load_w_per_unit[name]
-            for name, before in _load_sp_before.items()
-        )
+            # 7c. Switch loads: feedforward updates residual for each decision
+            residual = await self._apply_load_switch_hysteresis(
+                residual + load_absorbed_w, now, loads
+            )
 
-        # 7c. Switch loads: feedforward updates residual for each decision
-        residual = await self._apply_load_switch_hysteresis(
-            residual + load_absorbed_w, now, loads
-        )
+            # 7d. Switch arrays: hysteresis on updated residual
+            await self._apply_switch_hysteresis(residual, now, arrays)
 
-        # 7d. Switch arrays: hysteresis on updated residual
-        await self._apply_switch_hysteresis(residual, now, arrays)
-
-        # 8. Battery discharge layer (all numeric PV at max AND still importing)
-        if filtered > 0 and batteries:
+        # 8. Reactive battery discharge layer (all numeric PV at max AND still importing)
+        if filtered > 0 and reactive_batteries:
             numeric = [a for a in arrays if not a.is_switch]
             all_maxed = all(
                 self._current_setpoints.get(a.name, a.setpoint_max) >= a.setpoint_max
                 for a in numeric
             )
             if all_maxed or not numeric:
-                total_discharge_cap = sum(b.max_discharge_w for b in batteries)
+                total_discharge_cap = sum(b.max_discharge_w for b in reactive_batteries)
                 if total_discharge_cap > 0:
                     discharge_w = min(total_discharge_cap, abs(residual))
-                    for battery in batteries:
+                    for battery in reactive_batteries:
                         target = (
                             discharge_w * battery.max_discharge_w / total_discharge_cap
                         )
@@ -342,7 +465,7 @@ class ControlEngine:
             grid_raw_w=grid_raw,
             grid_filtered_w=filtered,
             pid_output_w=pid_output,
-            status=STATUS_ACTIVE,
+            status=cycle_status,
             setpoints=dict(self._current_setpoints),
             battery_setpoints=dict(self._current_battery_setpoints),
             load_setpoints=dict(self._current_load_setpoints),
@@ -657,6 +780,100 @@ class ControlEngine:
             await self._actuators.write_setpoint(array, new_sp)
             self._current_setpoints[array.name] = new_sp
             self._settling_until[array.name] = now + array.switch_debounce_s
+
+    async def _set_maximize_export(
+        self,
+        arrays: list[ArrayConfig],
+        loads: list[LoadConfig],
+        batteries: list[BatteryConfig],
+    ) -> None:
+        """Maximize export: arrays → max, loads → off, batteries → discharge max."""
+        for array in arrays:
+            new_sp = array.setpoint_max
+            try:
+                await self._actuators.write_setpoint(array, new_sp)
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to set array %s to max for maximize_export", array.name
+                )
+                continue
+            self._current_setpoints[array.name] = new_sp
+        for load in loads:
+            try:
+                if load.is_switch:
+                    await self._actuators.write_switch_entity(
+                        load.setpoint_entity, False
+                    )
+                    self._current_load_setpoints[load.name] = 0.0
+                else:
+                    await self._actuators.write_numeric_entity(
+                        load.setpoint_entity, load.setpoint_min
+                    )
+                    self._current_load_setpoints[load.name] = load.setpoint_min
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to set load %s to min for maximize_export", load.name
+                )
+        for battery in batteries:
+            target = battery.max_discharge_w
+            try:
+                await self._actuators.write_numeric_entity(
+                    battery.setpoint_entity, target
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to set battery %s to discharge for maximize_export",
+                    battery.name,
+                )
+                continue
+            self._current_battery_setpoints[battery.name] = target
+
+    async def _set_maximize_import(
+        self,
+        arrays: list[ArrayConfig],
+        loads: list[LoadConfig],
+        batteries: list[BatteryConfig],
+    ) -> None:
+        """Maximize import: arrays → off, loads → max, batteries → charge max."""
+        for array in arrays:
+            new_sp = array.setpoint_min
+            try:
+                await self._actuators.write_setpoint(array, new_sp)
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to set array %s to min for maximize_import", array.name
+                )
+                continue
+            self._current_setpoints[array.name] = new_sp
+        for load in loads:
+            try:
+                if load.is_switch:
+                    await self._actuators.write_switch_entity(
+                        load.setpoint_entity, True
+                    )
+                    self._current_load_setpoints[load.name] = 1.0
+                else:
+                    await self._actuators.write_numeric_entity(
+                        load.setpoint_entity, load.setpoint_max
+                    )
+                    self._current_load_setpoints[load.name] = load.setpoint_max
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to set load %s to max for maximize_import", load.name
+                )
+        for battery in batteries:
+            target = -battery.max_charge_w
+            try:
+                await self._actuators.write_numeric_entity(
+                    battery.setpoint_entity, target
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to set battery %s to charge for maximize_import",
+                    battery.name,
+                )
+                continue
+            self._current_battery_setpoints[battery.name] = target
 
     async def _enter_load_safe_state(self, loads: list[LoadConfig]) -> None:
         """Move all loads to a neutral fail-safe state (minimum setpoint / off)."""

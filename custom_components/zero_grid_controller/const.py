@@ -58,6 +58,7 @@ CONF_BATTERY_SENSOR = "battery_sensor"
 CONF_BATTERY_MAX_CHARGE_W = "battery_max_charge_w"
 CONF_BATTERY_MAX_DISCHARGE_W = "battery_max_discharge_w"
 CONF_BATTERY_SETPOINT_ENTITY = "battery_setpoint_entity"
+CONF_BATTERY_SCHEDULE_SENSOR = "battery_schedule_sensor"
 
 # Defaults
 DEFAULT_EWM_ALPHA = 0.3
@@ -123,12 +124,36 @@ class ControllerStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
     DEADBAND = "deadband"
+    IDLE_IMPORT_OK = "idle_import_ok"  # zero_export mode: grid positive → idle
+    IDLE_EXPORT_OK = "idle_export_ok"  # zero_import mode: grid negative → idle
+    MAXIMIZING_EXPORT = "maximizing_export"  # maximize_export mode active
+    MAXIMIZING_IMPORT = "maximizing_import"  # maximize_import mode active
 
 
 # Aliases for backward compatibility — existing imports are unchanged
 STATUS_ACTIVE = ControllerStatus.ACTIVE
 STATUS_DISABLED = ControllerStatus.DISABLED
 STATUS_DEADBAND = ControllerStatus.DEADBAND
+STATUS_IDLE_IMPORT_OK = ControllerStatus.IDLE_IMPORT_OK
+STATUS_IDLE_EXPORT_OK = ControllerStatus.IDLE_EXPORT_OK
+STATUS_MAXIMIZING_EXPORT = ControllerStatus.MAXIMIZING_EXPORT
+STATUS_MAXIMIZING_IMPORT = ControllerStatus.MAXIMIZING_IMPORT
+
+
+class ControllerMode(StrEnum):
+    """Operating mode for the control loop."""
+
+    ZERO_GRID = "zero_grid"  # no import or export (default)
+    ZERO_IMPORT = "zero_import"  # allow export, prevent import
+    ZERO_EXPORT = "zero_export"  # allow import, prevent export
+    MAXIMIZE_EXPORT = "maximize_export"  # PV max, loads off — sell as much as possible
+    MAXIMIZE_IMPORT = (
+        "maximize_import"  # PV off, loads max — consume as much as possible
+    )
+
+
+CONF_CONTROL_MODE = "control_mode"
+DEFAULT_CONTROL_MODE = ControllerMode.ZERO_GRID
 
 # Number entity UI constraints
 EWM_ALPHA_MIN = 0.05
@@ -141,6 +166,7 @@ DEADBAND_STEP_W = 1.0
 # Platforms
 PLATFORMS = [
     Platform.BINARY_SENSOR,
+    Platform.SELECT,
     Platform.SENSOR,
     Platform.NUMBER,
     Platform.BUTTON,
