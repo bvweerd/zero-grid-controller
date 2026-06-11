@@ -101,11 +101,17 @@
             "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_setpoint_entity": "Battery setpoint entity"
+            "battery_setpoint_entity": "Battery setpoint entity",
+            "battery_soc_sensor": "State of charge sensor (optional)",
+            "battery_min_soc": "Minimum state of charge (%)",
+            "battery_max_soc": "Maximum state of charge (%)"
           },
           "data_description": {
             "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
-            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge).",
+            "battery_soc_sensor": "When set, charging stops at the maximum SoC and discharging stops at the minimum SoC.",
+            "battery_min_soc": "Discharging is blocked at or below this state of charge.",
+            "battery_max_soc": "Charging is blocked at or above this state of charge."
           }
         },
         "reconfigure": {
@@ -116,11 +122,17 @@
             "battery_sensor": "Battery power sensor",
             "battery_max_charge_w": "Maximum charge power (W)",
             "battery_max_discharge_w": "Maximum discharge power (W)",
-            "battery_setpoint_entity": "Battery setpoint entity"
+            "battery_setpoint_entity": "Battery setpoint entity",
+            "battery_soc_sensor": "State of charge sensor (optional)",
+            "battery_min_soc": "Minimum state of charge (%)",
+            "battery_max_soc": "Maximum state of charge (%)"
           },
           "data_description": {
             "battery_sensor": "Sign convention: negative = charging, positive = discharging.",
-            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge)."
+            "battery_setpoint_entity": "The number entity the controller writes to set the battery target power (negative = charge, positive = discharge).",
+            "battery_soc_sensor": "When set, charging stops at the maximum SoC and discharging stops at the minimum SoC.",
+            "battery_min_soc": "Discharging is blocked at or below this state of charge.",
+            "battery_max_soc": "Charging is blocked at or above this state of charge."
           }
         }
       },
@@ -181,15 +193,25 @@
       }
     },
     "number": {
-      "ewm_alpha": { "name": "EWM filter alpha" },
-      "deadband_w": { "name": "Deadband (W)" }
+      "ewm_alpha": {
+        "name": "EWM filter alpha"
+      },
+      "deadband_w": {
+        "name": "Deadband (W)"
+      }
     },
     "button": {
-      "reset_pid": { "name": "Reset PID" },
-      "recalibrate": { "name": "Recalibrate all arrays" }
+      "reset_pid": {
+        "name": "Reset PID"
+      },
+      "recalibrate": {
+        "name": "Recalibrate all arrays"
+      }
     },
     "switch": {
-      "controller_enabled": { "name": "Controller enabled" }
+      "controller_enabled": {
+        "name": "Controller enabled"
+      }
     }
   },
   "selector": {

@@ -101,11 +101,17 @@
             "battery_sensor": "Batterijvermogensensor",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
             "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
-            "battery_setpoint_entity": "Batterij setpoint-entiteit"
+            "battery_setpoint_entity": "Batterij setpoint-entiteit",
+            "battery_soc_sensor": "Laadtoestand-sensor (optioneel)",
+            "battery_min_soc": "Minimale laadtoestand (%)",
+            "battery_max_soc": "Maximale laadtoestand (%)"
           },
           "data_description": {
             "battery_sensor": "Tekenteken: negatief = laden, positief = ontladen.",
-            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen)."
+            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen).",
+            "battery_soc_sensor": "Indien ingesteld stopt laden bij de maximale laadtoestand en ontladen bij de minimale laadtoestand.",
+            "battery_min_soc": "Ontladen wordt geblokkeerd op of onder deze laadtoestand.",
+            "battery_max_soc": "Laden wordt geblokkeerd op of boven deze laadtoestand."
           }
         },
         "reconfigure": {
@@ -116,11 +122,17 @@
             "battery_sensor": "Batterijvermogensensor",
             "battery_max_charge_w": "Maximaal laadvermogen (W)",
             "battery_max_discharge_w": "Maximaal ontlaadvermogen (W)",
-            "battery_setpoint_entity": "Batterij setpoint-entiteit"
+            "battery_setpoint_entity": "Batterij setpoint-entiteit",
+            "battery_soc_sensor": "Laadtoestand-sensor (optioneel)",
+            "battery_min_soc": "Minimale laadtoestand (%)",
+            "battery_max_soc": "Maximale laadtoestand (%)"
           },
           "data_description": {
             "battery_sensor": "Tekenteken: negatief = laden, positief = ontladen.",
-            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen)."
+            "battery_setpoint_entity": "De number-entiteit waarnaar de controller schrijft om het doelvermogen in te stellen (negatief = laden, positief = ontladen).",
+            "battery_soc_sensor": "Indien ingesteld stopt laden bij de maximale laadtoestand en ontladen bij de minimale laadtoestand.",
+            "battery_min_soc": "Ontladen wordt geblokkeerd op of onder deze laadtoestand.",
+            "battery_max_soc": "Laden wordt geblokkeerd op of boven deze laadtoestand."
           }
         }
       },
@@ -181,15 +193,25 @@
       }
     },
     "number": {
-      "ewm_alpha": { "name": "EWM-filter alpha" },
-      "deadband_w": { "name": "Dodeband (W)" }
+      "ewm_alpha": {
+        "name": "EWM-filter alpha"
+      },
+      "deadband_w": {
+        "name": "Dodeband (W)"
+      }
     },
     "button": {
-      "reset_pid": { "name": "PID resetten" },
-      "recalibrate": { "name": "Alle arrays opnieuw kalibreren" }
+      "reset_pid": {
+        "name": "PID resetten"
+      },
+      "recalibrate": {
+        "name": "Alle arrays opnieuw kalibreren"
+      }
     },
     "switch": {
-      "controller_enabled": { "name": "Controller ingeschakeld" }
+      "controller_enabled": {
+        "name": "Controller ingeschakeld"
+      }
     }
   },
   "selector": {

@@ -19,8 +19,11 @@ from .const import (
     CONF_ARRAY_NAME,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
+    CONF_BATTERY_MAX_SOC,
+    CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_DEADBAND_W,
     CONF_EWM_ALPHA,
     CONF_GRID_EXPORT_SENSORS,
@@ -38,6 +41,8 @@ from .const import (
     DEFAULT_AGGRESSIVENESS,
     DEFAULT_BATTERY_MAX_CHARGE_W,
     DEFAULT_BATTERY_MAX_DISCHARGE_W,
+    DEFAULT_BATTERY_MAX_SOC,
+    DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
     DEFAULT_SETPOINT_MAX,
@@ -255,6 +260,38 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_BATTERY_SETPOINT_ENTITY,
                 default=defaults.get(CONF_BATTERY_SETPOINT_ENTITY, ""),
             ): selector({"entity": {"domain": ["number", "input_number"]}}),
+            vol.Optional(
+                CONF_BATTERY_SOC_SENSOR,
+                description={
+                    "suggested_value": defaults.get(CONF_BATTERY_SOC_SENSOR) or None
+                },
+            ): selector({"entity": {"domain": "sensor", "device_class": "battery"}}),
+            vol.Optional(
+                CONF_BATTERY_MIN_SOC,
+                default=defaults.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC),
+            ): selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 100,
+                        "step": 1,
+                        "unit_of_measurement": "%",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_BATTERY_MAX_SOC,
+                default=defaults.get(CONF_BATTERY_MAX_SOC, DEFAULT_BATTERY_MAX_SOC),
+            ): selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 100,
+                        "step": 1,
+                        "unit_of_measurement": "%",
+                    }
+                }
+            ),
         }
     )
 
