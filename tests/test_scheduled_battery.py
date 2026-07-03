@@ -202,8 +202,9 @@ async def test_scheduled_battery_grid_correction_increases_charge_when_exporting
 # ---------------------------------------------------------------------------
 
 
-async def test_scheduled_battery_sensor_unavailable_falls_back_to_correction_only(hass):
-    """When the schedule sensor is 'unavailable', schedule_w defaults to 0."""
+async def test_scheduled_battery_sensor_unavailable_falls_back_to_reactive(hass):
+    """An 'unavailable' schedule sensor drops the battery into the reactive
+    layer (SoC-aware, incremental) instead of correction-only control."""
     entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -216,13 +217,13 @@ async def test_scheduled_battery_sensor_unavailable_falls_back_to_correction_onl
         result = await coordinator._async_update_data()
 
     sp = result.battery_setpoints.get("SchedBat")
-    # schedule_w = 0.0, correction = +400, so target = +400 (discharge to cover import)
+    # Reactive layer: import 400 W, no PV/loads to correct → discharge 400 W
     assert sp is not None
     assert sp > 0
 
 
-async def test_scheduled_battery_sensor_unknown_falls_back_to_correction_only(hass):
-    """When the schedule sensor is 'unknown', schedule_w defaults to 0."""
+async def test_scheduled_battery_sensor_unknown_falls_back_to_reactive(hass):
+    """An 'unknown' schedule sensor drops the battery into the reactive layer."""
     entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -236,13 +237,13 @@ async def test_scheduled_battery_sensor_unknown_falls_back_to_correction_only(ha
 
     sp = result.battery_setpoints.get("SchedBat")
     assert sp is not None
-    assert sp > 0  # correction only — grid importing, push toward discharge
+    assert sp > 0  # reactive discharge — grid importing, nothing else to correct
 
 
-async def test_scheduled_battery_sensor_entity_missing_falls_back_to_correction_only(
+async def test_scheduled_battery_sensor_entity_missing_falls_back_to_reactive(
     hass,
 ):
-    """When the schedule sensor entity does not exist at all, schedule_w defaults to 0."""
+    """A missing schedule sensor entity drops the battery into the reactive layer."""
     entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -258,11 +259,11 @@ async def test_scheduled_battery_sensor_entity_missing_falls_back_to_correction_
 
     sp = result.battery_setpoints.get("SchedBat")
     assert sp is not None
-    assert sp > 0  # correction only
+    assert sp > 0  # reactive discharge
 
 
-async def test_scheduled_battery_sensor_non_numeric_falls_back_to_correction_only(hass):
-    """A non-numeric sensor state (e.g. 'error') is treated as schedule_w = 0."""
+async def test_scheduled_battery_sensor_non_numeric_falls_back_to_reactive(hass):
+    """A non-numeric schedule sensor state drops the battery into the reactive layer."""
     entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -508,3 +509,156 @@ async def test_multiple_scheduled_batteries_correction_split_proportionally(hass
     assert abs(sp_b - 600.0) < 5.0
     # BatB correction is 3× BatA correction
     assert abs(sp_b / sp_a - 3.0) < 0.1
+
+
+# ---------------------------------------------------------------------------
+# Closed loop: scheduled battery + PID must not double-correct
+# ---------------------------------------------------------------------------
+
+
+async def test_scheduled_battery_and_pid_do_not_oscillate(hass):
+    """The scheduled correction is fed forward into the PID residual.
+
+    Without the feedforward, the scheduled battery and the PID each corrected
+    the full grid error every cycle (combined loop gain ≈ 2) and the closed
+    loop diverged into a full-power charge/discharge oscillation.
+    """
+    from custom_components.zero_grid_controller.array import ArrayConfig
+
+    entry = _entry(deadband_w=10.0, ewm_alpha=1.0, kp=1.0, ki=0.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.arrays = [
+        ArrayConfig(
+            name="Solar",
+            output_type="percent",
+            setpoint_entity="number.solar",
+            w_per_unit=50.0,
+            calibration_confidence="estimated",
+            setpoint_min=0.0,
+            setpoint_max=100.0,
+            settling_time_s=0,
+        )
+    ]
+    coordinator.batteries = [_make_scheduled_battery()]
+    coordinator._engine._current_setpoints["Solar"] = 40.0  # limited to 2000 W
+
+    plant = {"sp": 40.0, "bat": 0.0, "bat_target": 0.0}
+    clock = {"t": 1000.0}
+
+    class _FakeTime:
+        @staticmethod
+        def monotonic() -> float:
+            return clock["t"]
+
+    def publish() -> float:
+        pv = min(5000.0, plant["sp"] * 50.0)
+        grid = 3000.0 - pv - plant["bat"]
+        _grid(hass, import_w=max(0.0, grid), export_w=max(0.0, -grid))
+        hass.states.async_set("sensor.battery_power", str(plant["bat"]))
+        hass.states.async_set("sensor.optimizer_setpoint", "0")
+        return grid
+
+    async def on_sp(array, value):
+        plant["sp"] = value
+
+    async def on_num(entity_id, value):
+        if entity_id == "number.battery_sp":
+            plant["bat_target"] = value
+
+    publish()
+    grid_trace: list[float] = []
+    with (
+        patch("custom_components.zero_grid_controller.control_engine.time", _FakeTime),
+        patch.object(
+            coordinator._actuators,
+            "write_setpoint",
+            new=AsyncMock(side_effect=on_sp),
+        ),
+        patch.object(
+            coordinator._actuators,
+            "write_numeric_entity",
+            new=AsyncMock(side_effect=on_num),
+        ),
+    ):
+        for _ in range(15):
+            clock["t"] += 5.0
+            await coordinator._async_update_data()
+            plant["bat"] = plant["bat_target"]  # battery follows instantly
+            grid_trace.append(publish())
+
+    # Converged, not oscillating: the last cycles stay within the deadband
+    assert all(abs(g) <= 10.0 for g in grid_trace[-5:]), grid_trace
+
+
+# ---------------------------------------------------------------------------
+# SoC limits bound the corrected schedule target
+# ---------------------------------------------------------------------------
+
+
+async def test_scheduled_battery_soc_max_blocks_charging(hass):
+    """At/above max SoC the corrected target is clamped to ≥ 0 (no charge)."""
+    entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    battery = _make_scheduled_battery()
+    battery.soc_sensor_entity = "sensor.battery_soc"
+    battery.max_soc = 95.0
+    coordinator.batteries = [battery]
+
+    hass.states.async_set("sensor.battery_soc", "96")
+    hass.states.async_set("sensor.optimizer_setpoint", "-2000")  # optimizer: charge
+    _grid(hass, import_w=0, export_w=500)
+
+    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()):
+        result = await coordinator._async_update_data()
+
+    sp = result.battery_setpoints.get("SchedBat")
+    assert sp is not None
+    assert sp >= 0, "Full battery must not be commanded to charge"
+
+
+async def test_scheduled_battery_soc_min_blocks_discharge(hass):
+    """At/below min SoC the corrected target is clamped to ≤ 0 (no discharge)."""
+    entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    battery = _make_scheduled_battery()
+    battery.soc_sensor_entity = "sensor.battery_soc"
+    battery.min_soc = 10.0
+    coordinator.batteries = [battery]
+
+    hass.states.async_set("sensor.battery_soc", "8")
+    hass.states.async_set("sensor.optimizer_setpoint", "2000")  # optimizer: discharge
+    _grid(hass, import_w=500, export_w=0)
+
+    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()):
+        result = await coordinator._async_update_data()
+
+    sp = result.battery_setpoints.get("SchedBat")
+    assert sp is not None
+    assert sp <= 0, "Empty battery must not be commanded to discharge"
+
+
+async def test_scheduled_battery_write_skipped_when_unchanged(hass):
+    """An unchanged scheduled target (< 1 W delta) is not rewritten every cycle."""
+    entry = _entry(deadband_w=0.0, ewm_alpha=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.batteries = [_make_scheduled_battery()]
+
+    hass.states.async_set("sensor.optimizer_setpoint", "-1500")
+    hass.states.async_set("sensor.battery_power", "-1500")
+    _grid(hass, import_w=0, export_w=0)
+    hass.states.async_set("sensor.grid_import", "0.4")  # tiny error < 1 W target delta
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        await coordinator._async_update_data()
+        first_calls = mock_write.await_count
+        await coordinator._async_update_data()
+
+    assert mock_write.await_count == first_calls, (
+        "Unchanged scheduled target must not be rewritten"
+    )
