@@ -103,6 +103,14 @@ DEFAULT_AGGRESSIVENESS = "normal"
 DEFAULT_LOAD_PRIORITY = 50
 DEFAULT_LOAD_DEBOUNCE_S = 30
 
+# Failsafe behaviour when grid sensors are unavailable / controller disabled
+CONF_FAILSAFE_MODE = "failsafe_mode"
+FAILSAFE_MODE_MAXIMIZE = "maximize"  # PV to max (self-consumption setups)
+FAILSAFE_MODE_CURTAIL = "curtail"  # PV to min (zero-export requirements)
+DEFAULT_FAILSAFE_MODE = FAILSAFE_MODE_MAXIMIZE
+# Consecutive unavailable grid reads tolerated (state held) before failsafe.
+GRID_UNAVAILABLE_TOLERANCE_CYCLES = 3
+
 # Calibration constants
 CALIB_MAX_GRID_W = 3000.0  # Abort if |grid_w| exceeds this during calibration
 CALIB_MAX_TIME_S = 90  # Maximum seconds per array

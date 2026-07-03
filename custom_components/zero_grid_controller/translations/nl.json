@@ -11,13 +11,15 @@
           "deadband_w": "Negeringszone (W)",
           "ewm_alpha": "Signaalfiltering (0 = zwaar, 1 = geen)",
           "aggressiveness": "Reactiesnelheid",
-          "control_mode": "Regelmodus"
+          "control_mode": "Regelmodus",
+          "failsafe_mode": "Failsafe-gedrag"
         },
         "data_description": {
           "deadband_w": "Gridschommelingen binnen ±deze waarde worden genegeerd. Voorkomt constante micro-aanpassingen als het al bijna nul is. Begin met 20 W.",
           "ewm_alpha": "Hoe snel de controller reageert op gridwijzigingen. Lager = vloeiender maar trager (0,1), hoger = sneller maar grilliger (0,5). Standaard 0,3 is geschikt voor de meeste systemen.",
           "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven.",
-          "control_mode": "zero_grid: voorkomt zowel import als export. zero_import: staat export toe, voorkomt import. zero_export: staat import toe, voorkomt export. maximize_export: PV maximaal, belastingen uit. maximize_import: PV uit, belastingen maximaal."
+          "control_mode": "zero_grid: voorkomt zowel import als export. zero_import: staat export toe, voorkomt import. zero_export: staat import toe, voorkomt export. maximize_export: PV maximaal, belastingen uit. maximize_import: PV uit, belastingen maximaal.",
+          "failsafe_mode": "Wat de regelaar met de PV-limieten doet als de netmeting niet beschikbaar is of de regelaar is uitgeschakeld. Maximaliseren = PV naar vol vermogen (eigen verbruik). Begrenzen = PV naar minimum (nul-export-verplichting)."
         }
       }
     },
@@ -228,13 +230,15 @@
           "deadband_w": "Negeringszone (W)",
           "ewm_alpha": "Signaalfiltering (0 = zwaar, 1 = geen)",
           "aggressiveness": "Reactiesnelheid",
-          "control_mode": "Regelmodus"
+          "control_mode": "Regelmodus",
+          "failsafe_mode": "Failsafe-gedrag"
         },
         "data_description": {
           "deadband_w": "Gridschommelingen binnen ±deze waarde worden genegeerd. Voorkomt constante micro-aanpassingen als het al bijna nul is. Begin met 20 W.",
           "ewm_alpha": "Hoe snel de controller reageert op gridwijzigingen. Lager = vloeiender maar trager (0,1), hoger = sneller maar grilliger (0,5). Standaard 0,3 is geschikt voor de meeste systemen.",
           "aggressiveness": "Hoe snel de controller reageert na kalibratie. Voorzichtig = stabiel, traag. Normaal = uitgebalanceerd. Snel = vlug, kan overshoot geven.",
-          "control_mode": "zero_grid: voorkomt zowel import als export. zero_import: staat export toe, voorkomt import. zero_export: staat import toe, voorkomt export. maximize_export: PV maximaal, belastingen uit. maximize_import: PV uit, belastingen maximaal."
+          "control_mode": "zero_grid: voorkomt zowel import als export. zero_import: staat export toe, voorkomt import. zero_export: staat import toe, voorkomt export. maximize_export: PV maximaal, belastingen uit. maximize_import: PV uit, belastingen maximaal.",
+          "failsafe_mode": "Wat de regelaar met de PV-limieten doet als de netmeting niet beschikbaar is of de regelaar is uitgeschakeld. Maximaliseren = PV naar vol vermogen (eigen verbruik). Begrenzen = PV naar minimum (nul-export-verplichting)."
         }
       }
     }
@@ -348,6 +352,12 @@
         "zero_export": "Zero export — staat import toe, voorkomt export",
         "maximize_export": "Maximale export — PV maximaal, belastingen uit",
         "maximize_import": "Maximale import — PV uit, belastingen maximaal"
+      }
+    },
+    "failsafe_mode": {
+      "options": {
+        "maximize": "Maximaliseren — PV naar vol vermogen (eigen verbruik)",
+        "curtail": "Begrenzen — PV naar minimum (nul-export-verplichting)"
       }
     }
   },

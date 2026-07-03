@@ -16,6 +16,7 @@ from .const import (
     BATTERY_WRITE_THRESHOLD_W,
     CONTROL_DT_MAX,
     CONTROL_DT_MIN,
+    DEFAULT_FAILSAFE_MODE,
     PV_RECOVERY_STEP_W,
     PV_RECOVERY_TRACKING_TOLERANCE_W,
     STATUS_ACTIVE,
@@ -82,6 +83,7 @@ class ControlEngine:
         ewm_alpha: float,
         deadband_w: float,
         mode: ControllerMode = ControllerMode.ZERO_GRID,
+        failsafe_mode: str = DEFAULT_FAILSAFE_MODE,
     ) -> None:
         self._hass = hass
         self._pid = pid
@@ -89,6 +91,7 @@ class ControlEngine:
         self._ewm_alpha = ewm_alpha
         self._deadband_w = deadband_w
         self._mode = mode
+        self._failsafe_mode = failsafe_mode
 
         self._filtered_w: float | None = None
         self._filter_sample_count: int = 0
@@ -136,12 +139,14 @@ class ControlEngine:
         ewm_alpha: float,
         deadband_w: float,
         mode: ControllerMode = ControllerMode.ZERO_GRID,
+        failsafe_mode: str = DEFAULT_FAILSAFE_MODE,
     ) -> None:
         """Update PID and filter parameters, preserving all state dicts."""
         self._pid = pid
         self._ewm_alpha = ewm_alpha
         self._deadband_w = deadband_w
         self._mode = mode
+        self._failsafe_mode = failsafe_mode
 
     def restore_filter_state(
         self,
@@ -204,8 +209,12 @@ class ControlEngine:
         # 1. Grid unavailability → safe state
         if grid_raw is None:
             self._pid.reset()
+            # Restart the EWM warm-up on recovery so stale filter state does
+            # not bias the first cycles after an outage.
+            self._filtered_w = None
+            self._filter_sample_count = 0
             await self._actuators.enter_safe_state(
-                arrays, batteries, self._current_setpoints
+                arrays, batteries, self._current_setpoints, self._failsafe_mode
             )
             await self._enter_load_safe_state(loads)
             return ControlCycleResult(
@@ -248,7 +257,7 @@ class ControlEngine:
         if not enabled:
             self._pid.reset()
             await self._actuators.enter_safe_state(
-                arrays, batteries, self._current_setpoints
+                arrays, batteries, self._current_setpoints, self._failsafe_mode
             )
             await self._enter_load_safe_state(loads)
             return ControlCycleResult(
