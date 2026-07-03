@@ -26,7 +26,7 @@ from .const import (
 )
 from .load import LoadConfig
 from .pid import PIDController
-from .utils import clamp
+from .utils import clamp, power_unit_factor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ class ControlEngine:
                 assert (
                     schedule_sensor is not None
                 )  # guaranteed by list comprehension above
-                schedule_w = self.read_sensor_safe(schedule_sensor) or 0.0
+                schedule_w = self.read_power_w(schedule_sensor) or 0.0
                 # Proportional reactive correction: adjusts schedule up/down based on
                 # the current grid error.  filtered > 0 → importing → push toward
                 # discharge (positive correction); filtered < 0 → exporting → push
@@ -470,6 +470,18 @@ class ControlEngine:
         except ValueError:
             return None
 
+    def read_power_w(self, entity_id: str) -> float | None:
+        """Read a power sensor in Watts, converting kW/MW/mW units."""
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            value = float(state.state)
+        except ValueError:
+            return None
+        attributes = getattr(state, "attributes", None) or {}
+        return value * power_unit_factor(attributes.get("unit_of_measurement"))
+
     def entity_state(self, entity_id: str) -> str | None:
         """Return entity state string, or None if missing/unavailable/unknown."""
         state = self._hass.states.get(entity_id)
@@ -490,7 +502,7 @@ class ControlEngine:
         """
         state = BatteryState()
         for battery in batteries:
-            actual = self.read_sensor_safe(battery.sensor_entity)
+            actual = self.read_power_w(battery.sensor_entity)
             if actual is None:
                 actual = self._current_battery_setpoints.get(battery.name, 0.0)
             state.actuals[battery.name] = actual
@@ -750,7 +762,7 @@ class ControlEngine:
         """
         if array.power_sensor_entity is None:
             return True
-        actual = self.read_sensor_safe(array.power_sensor_entity)
+        actual = self.read_power_w(array.power_sensor_entity)
         if actual is None:
             return True
         current_sp = self._current_setpoints.get(array.name, array.setpoint_max)

@@ -56,6 +56,7 @@ from .control_engine import ControlCycleResult, ControlEngine
 from .load import load_config_from_subentry
 from .pid import PIDController
 from .repairs import dismiss_grid_sensor_unavailable, raise_grid_sensor_unavailable
+from .utils import power_unit_factor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -344,6 +345,18 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         except ValueError:
             return None
 
+    def read_power_w(self, entity_id: str) -> float | None:
+        """Read a power sensor in Watts, converting kW/MW/mW units."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            value = float(state.state)
+        except ValueError:
+            return None
+        attributes = getattr(state, "attributes", None) or {}
+        return value * power_unit_factor(attributes.get("unit_of_measurement"))
+
     def entity_state(self, entity_id: str) -> str | None:
         """Return entity state string, or None if missing/unavailable/unknown."""
         state = self.hass.states.get(entity_id)
@@ -352,15 +365,15 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
         return str(state.state)
 
     async def _read_grid(self) -> float | None:
-        """Read and sum grid import/export sensors. Returns None on failure."""
+        """Read and sum grid import/export sensors (in W). None on failure."""
         total = 0.0
         for entity_id in self._import_sensors:
-            val = self.read_sensor_safe(entity_id)
+            val = self.read_power_w(entity_id)
             if val is None:
                 return None
             total += val
         for entity_id in self._export_sensors:
-            val = self.read_sensor_safe(entity_id)
+            val = self.read_power_w(entity_id)
             if val is None:
                 return None
             total -= val
