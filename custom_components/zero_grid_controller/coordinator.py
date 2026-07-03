@@ -239,6 +239,7 @@ class ZeroGridCoordinator(DataUpdateCoordinator[ZGCResult]):
             write_setpoint=self._actuators.write_setpoint,
             sensor_reader=self,
             on_array_done=self._on_calibration_array_done,
+            read_grid=self._read_grid,
         )
         try:
             results = await self._calibrator.run()
