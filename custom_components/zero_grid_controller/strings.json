@@ -11,13 +11,15 @@
           "deadband_w": "Ignore zone (W)",
           "ewm_alpha": "Signal smoothing (0 = heavy, 1 = none)",
           "aggressiveness": "Response speed",
-          "control_mode": "Control mode"
+          "control_mode": "Control mode",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
           "deadband_w": "Grid swings within ±this value are ignored. Prevents constant micro-adjustments when already close to zero. Start with 20 W.",
           "ewm_alpha": "How quickly the controller reacts to grid changes. Lower = smoother but slower (0.1), higher = faster but jumpier (0.5). Default 0.3 suits most systems.",
           "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot.",
-          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max."
+          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     },
@@ -229,13 +231,15 @@
           "deadband_w": "Ignore zone (W)",
           "ewm_alpha": "Signal smoothing (0 = heavy, 1 = none)",
           "aggressiveness": "Response speed",
-          "control_mode": "Control mode"
+          "control_mode": "Control mode",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
           "deadband_w": "Grid swings within ±this value are ignored. Prevents constant micro-adjustments when already close to zero. Start with 20 W.",
           "ewm_alpha": "How quickly the controller reacts to grid changes. Lower = smoother but slower (0.1), higher = faster but jumpier (0.5). Default 0.3 suits most systems.",
           "aggressiveness": "How fast the controller responds after calibration. Cautious = stable, slow. Normal = balanced. Fast = quick, may overshoot.",
-          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max."
+          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     }
@@ -349,6 +353,12 @@
         "zero_export": "Zero export — allow import, prevent export",
         "maximize_export": "Maximize export — PV max, loads off",
         "maximize_import": "Maximize import — PV off, loads max"
+      }
+    },
+    "failsafe_mode": {
+      "options": {
+        "maximize": "Maximize — PV to full output (self-consumption)",
+        "curtail": "Curtail — PV to minimum (zero-export requirement)"
       }
     }
   },

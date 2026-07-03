@@ -10,7 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .array import ArrayConfig
 from .battery import BatteryConfig
-from .const import OUTPUT_TYPE_SWITCH
+from .const import DEFAULT_FAILSAFE_MODE, FAILSAFE_MODE_CURTAIL, OUTPUT_TYPE_SWITCH
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,16 +79,28 @@ class ActuatorManager:
         arrays: list[ArrayConfig],
         batteries: list[BatteryConfig],
         current_setpoints: dict[str, float],
+        failsafe_mode: str = DEFAULT_FAILSAFE_MODE,
     ) -> None:
-        """Move all actuators to a neutral fail-safe state."""
+        """Move all actuators to a neutral fail-safe state.
+
+        *failsafe_mode* selects the PV direction: "maximize" (default, for
+        self-consumption setups) or "curtail" (for zero-export requirements).
+        """
         for array in arrays:
             if array.is_switch:
                 continue  # switches are safe at their current state
+            target = (
+                array.setpoint_min
+                if failsafe_mode == FAILSAFE_MODE_CURTAIL
+                else array.setpoint_max
+            )
             try:
-                await self.write_setpoint(array, array.setpoint_max)
-                current_setpoints[array.name] = array.setpoint_max
+                await self.write_setpoint(array, target)
+                current_setpoints[array.name] = target
             except Exception as err:
-                _LOGGER.error("Failed to set %s to max: %s", array.name, err)
+                _LOGGER.error(
+                    "Failed to set %s to safe state %s: %s", array.name, target, err
+                )
 
         for battery in batteries:
             try:

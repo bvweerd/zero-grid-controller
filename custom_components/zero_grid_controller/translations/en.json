@@ -11,13 +11,15 @@
           "deadband_w": "Deadband (W)",
           "ewm_alpha": "EWM filter alpha",
           "aggressiveness": "Control aggressiveness",
-          "control_mode": "Control mode"
+          "control_mode": "Control mode",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
           "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
           "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
           "aggressiveness": "Controls how aggressively PID gains are set after calibration.",
-          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max."
+          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     },
@@ -228,13 +230,15 @@
           "deadband_w": "Deadband (W)",
           "ewm_alpha": "EWM filter alpha",
           "aggressiveness": "Control aggressiveness",
-          "control_mode": "Control mode"
+          "control_mode": "Control mode",
+          "failsafe_mode": "Failsafe behaviour"
         },
         "data_description": {
           "deadband_w": "Grid error below this value is ignored. Prevents unnecessary setpoint changes when already close to zero.",
           "ewm_alpha": "Smoothing factor for the grid signal (0.05 = heavy smoothing, 1.0 = no filter).",
           "aggressiveness": "Controls how aggressively PID gains are set after calibration.",
-          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max."
+          "control_mode": "zero_grid: prevent both import and export. zero_import: allow export, prevent import. zero_export: allow import, prevent export. maximize_export: PV max, loads off. maximize_import: PV off, loads max.",
+          "failsafe_mode": "What the controller does with PV limits when grid sensors are unavailable or the controller is disabled. Maximize = PV to full output (self-consumption setups). Curtail = PV to minimum (zero-export requirements)."
         }
       }
     }
@@ -339,6 +343,12 @@
         "zero_export": "Zero export — allow import, prevent export",
         "maximize_export": "Maximize export — PV max, loads off",
         "maximize_import": "Maximize import — PV off, loads max"
+      }
+    },
+    "failsafe_mode": {
+      "options": {
+        "maximize": "Maximize — PV to full output (self-consumption)",
+        "curtail": "Curtail — PV to minimum (zero-export requirement)"
       }
     }
   },
