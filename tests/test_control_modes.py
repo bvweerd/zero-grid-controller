@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -667,3 +669,116 @@ async def test_zero_export_idle_does_not_write_array_setpoints(hass):
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_IMPORT_OK
     assert written == [], f"No array writes expected in idle, got: {written}"
+
+
+# ---------------------------------------------------------------------------
+# Maximize modes: SoC limits and write-if-changed
+# ---------------------------------------------------------------------------
+
+
+def _battery_subentry(**extra):
+    return {
+        "data": {**_BATTERY_DATA, **extra},
+        "subentry_type": BATTERY_SUBENTRY_TYPE,
+        "subentry_id": "sub_bat",
+        "title": "Battery",
+        "unique_id": None,
+    }
+
+
+def _array_subentry():
+    return {
+        "data": _ARRAY_DATA,
+        "subentry_type": ARRAY_SUBENTRY_TYPE,
+        "subentry_id": "sub_arr",
+        "title": "Roof",
+        "unique_id": None,
+    }
+
+
+async def test_maximize_export_respects_min_soc(hass):
+    """An empty battery is not discharged in maximize_export mode."""
+    entry = _make_entry(
+        control_mode="maximize_export",
+        subentries_data=(_battery_subentry(battery_soc_sensor="sensor.battery_soc"),),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _set_state(hass, "sensor.battery_soc", 8)  # below default min_soc 10
+    _set_grid(hass, 0, 0)
+
+    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()):
+        result = await coordinator._async_update_data()
+
+    assert result.battery_setpoints.get("Battery") == 0.0, (
+        "maximize_export must not discharge a battery at/below min SoC"
+    )
+
+
+async def test_maximize_import_respects_max_soc(hass):
+    """A full battery is not charged in maximize_import mode."""
+    entry = _make_entry(
+        control_mode="maximize_import",
+        subentries_data=(_battery_subentry(battery_soc_sensor="sensor.battery_soc"),),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _set_state(hass, "sensor.battery_soc", 97)  # above default max_soc 95
+    _set_grid(hass, 0, 0)
+
+    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()):
+        result = await coordinator._async_update_data()
+
+    assert result.battery_setpoints.get("Battery") == 0.0, (
+        "maximize_import must not charge a battery at/above max SoC"
+    )
+
+
+async def test_maximize_export_skips_writes_when_entities_match(hass):
+    """maximize_export does not rewrite actuators that already match the target."""
+    entry = _make_entry(
+        control_mode="maximize_export",
+        subentries_data=(_array_subentry(), _battery_subentry()),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    # Entities already at the maximize targets
+    _set_state(hass, "number.inverter_limit", 100)
+    _set_state(hass, "number.battery_setpoint", 2000)
+    _set_grid(hass, 0, 0)
+
+    with (
+        patch.object(
+            coordinator._actuators, "write_setpoint", new=AsyncMock()
+        ) as mock_sp,
+        patch.object(
+            coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+        ) as mock_num,
+    ):
+        await coordinator._async_update_data()
+
+    mock_sp.assert_not_awaited()
+    mock_num.assert_not_awaited()
+
+
+async def test_maximize_export_reasserts_external_changes(hass):
+    """maximize_export re-writes an actuator that was changed externally."""
+    entry = _make_entry(
+        control_mode="maximize_export",
+        subentries_data=(_array_subentry(),),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    # Someone moved the limit down outside the controller
+    _set_state(hass, "number.inverter_limit", 40)
+    _set_grid(hass, 0, 0)
+
+    with patch.object(
+        coordinator._actuators, "write_setpoint", new=AsyncMock()
+    ) as mock_sp:
+        await coordinator._async_update_data()
+
+    mock_sp.assert_awaited()
+    assert mock_sp.call_args[0][1] == 100.0

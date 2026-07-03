@@ -1032,17 +1032,59 @@ class ControlEngine:
 
         return residual
 
+    def _battery_soc(self, battery: BatteryConfig) -> float | None:
+        """Return the battery SoC in %, or None when no sensor is configured."""
+        if not battery.soc_sensor_entity:
+            return None
+        return self.read_sensor_safe(battery.soc_sensor_entity)
+
+    async def _write_array_if_changed(self, array: ArrayConfig, target: float) -> bool:
+        """Write an array setpoint only when the entity does not match yet.
+
+        Comparing against the actual entity state (not our recorded value)
+        keeps the maximize modes enforcing their position against external
+        changes without re-writing every 5 s cycle.
+        """
+        if array.is_switch:
+            desired = "on" if target > array.setpoint_min else "off"
+            if self.entity_state(array.setpoint_entity) == desired:
+                return True
+        else:
+            current = self.read_sensor_safe(array.setpoint_entity)
+            if current is not None and abs(current - target) < 1.0:
+                return True
+        await self._actuators.write_setpoint(array, target)
+        return True
+
+    async def _write_numeric_if_changed(self, entity_id: str, target: float) -> None:
+        """Write a numeric entity only when its state does not match yet."""
+        current = self.read_sensor_safe(entity_id)
+        if current is not None and abs(current - target) < BATTERY_WRITE_THRESHOLD_W:
+            return
+        await self._actuators.write_numeric_entity(entity_id, target)
+
+    async def _write_switch_if_changed(self, entity_id: str, turn_on: bool) -> None:
+        """Write a switch entity only when its state does not match yet."""
+        if self.entity_state(entity_id) == ("on" if turn_on else "off"):
+            return
+        await self._actuators.write_switch_entity(entity_id, turn_on)
+
     async def _set_maximize_export(
         self,
         arrays: list[ArrayConfig],
         loads: list[LoadConfig],
         batteries: list[BatteryConfig],
     ) -> None:
-        """Maximize export: arrays → max, loads → off, batteries → discharge max."""
+        """Maximize export: arrays → max, loads → off, batteries → discharge max.
+
+        SoC limits are respected: a battery at or below min_soc is set to 0
+        instead of full discharge.  Writes are skipped when the entity already
+        matches the target.
+        """
         for array in arrays:
             new_sp = array.setpoint_max
             try:
-                await self._actuators.write_setpoint(array, new_sp)
+                await self._write_array_if_changed(array, new_sp)
             except Exception:
                 _LOGGER.exception(
                     "Failed to set array %s to max for maximize_export", array.name
@@ -1052,12 +1094,10 @@ class ControlEngine:
         for load in loads:
             try:
                 if load.is_switch:
-                    await self._actuators.write_switch_entity(
-                        load.setpoint_entity, False
-                    )
+                    await self._write_switch_if_changed(load.setpoint_entity, False)
                     self._current_load_setpoints[load.name] = 0.0
                 else:
-                    await self._actuators.write_numeric_entity(
+                    await self._write_numeric_if_changed(
                         load.setpoint_entity, load.setpoint_min
                     )
                     self._current_load_setpoints[load.name] = load.setpoint_min
@@ -1066,11 +1106,14 @@ class ControlEngine:
                     "Failed to set load %s to min for maximize_export", load.name
                 )
         for battery in batteries:
-            target = battery.max_discharge_w
+            soc = self._battery_soc(battery)
+            target = (
+                0.0
+                if soc is not None and soc <= battery.min_soc
+                else battery.max_discharge_w
+            )
             try:
-                await self._actuators.write_numeric_entity(
-                    battery.setpoint_entity, target
-                )
+                await self._write_numeric_if_changed(battery.setpoint_entity, target)
             except Exception:
                 _LOGGER.exception(
                     "Failed to set battery %s to discharge for maximize_export",
@@ -1085,11 +1128,16 @@ class ControlEngine:
         loads: list[LoadConfig],
         batteries: list[BatteryConfig],
     ) -> None:
-        """Maximize import: arrays → off, loads → max, batteries → charge max."""
+        """Maximize import: arrays → off, loads → max, batteries → charge max.
+
+        SoC limits are respected: a battery at or above max_soc is set to 0
+        instead of full charge.  Writes are skipped when the entity already
+        matches the target.
+        """
         for array in arrays:
             new_sp = array.setpoint_min
             try:
-                await self._actuators.write_setpoint(array, new_sp)
+                await self._write_array_if_changed(array, new_sp)
             except Exception:
                 _LOGGER.exception(
                     "Failed to set array %s to min for maximize_import", array.name
@@ -1099,12 +1147,10 @@ class ControlEngine:
         for load in loads:
             try:
                 if load.is_switch:
-                    await self._actuators.write_switch_entity(
-                        load.setpoint_entity, True
-                    )
+                    await self._write_switch_if_changed(load.setpoint_entity, True)
                     self._current_load_setpoints[load.name] = 1.0
                 else:
-                    await self._actuators.write_numeric_entity(
+                    await self._write_numeric_if_changed(
                         load.setpoint_entity, load.setpoint_max
                     )
                     self._current_load_setpoints[load.name] = load.setpoint_max
@@ -1113,11 +1159,14 @@ class ControlEngine:
                     "Failed to set load %s to max for maximize_import", load.name
                 )
         for battery in batteries:
-            target = -battery.max_charge_w
+            soc = self._battery_soc(battery)
+            target = (
+                0.0
+                if soc is not None and soc >= battery.max_soc
+                else -battery.max_charge_w
+            )
             try:
-                await self._actuators.write_numeric_entity(
-                    battery.setpoint_entity, target
-                )
+                await self._write_numeric_if_changed(battery.setpoint_entity, target)
             except Exception:
                 _LOGGER.exception(
                     "Failed to set battery %s to charge for maximize_import",
