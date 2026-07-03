@@ -26,6 +26,7 @@ from .const import (
     CONTROL_INTERVAL_S,
 )
 from .sensor_reader import SensorReader
+from .utils import power_unit_factor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -234,14 +235,16 @@ class ArrayCalibrator:
         if not entity_id:
             return None
         if self._sensor_reader is not None:
-            return self._sensor_reader.read_sensor_safe(entity_id)
+            return self._sensor_reader.read_power_w(entity_id)
         state = self._hass.states.get(entity_id)
         if state is None or state.state in ("unavailable", "unknown"):
             return None
         try:
-            return float(state.state)
+            value = float(state.state)
         except ValueError:
             return None
+        attributes = getattr(state, "attributes", None) or {}
+        return value * power_unit_factor(attributes.get("unit_of_measurement"))
 
     def _compute_global_gains(
         self, results: list[CalibrationResult]
