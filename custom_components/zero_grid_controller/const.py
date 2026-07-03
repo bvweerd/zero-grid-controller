@@ -59,6 +59,9 @@ CONF_BATTERY_MAX_CHARGE_W = "battery_max_charge_w"
 CONF_BATTERY_MAX_DISCHARGE_W = "battery_max_discharge_w"
 CONF_BATTERY_SETPOINT_ENTITY = "battery_setpoint_entity"
 CONF_BATTERY_SCHEDULE_SENSOR = "battery_schedule_sensor"
+CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
+CONF_BATTERY_MIN_SOC = "battery_min_soc"
+CONF_BATTERY_MAX_SOC = "battery_max_soc"
 
 # Defaults
 DEFAULT_EWM_ALPHA = 0.3
@@ -76,6 +79,26 @@ DEFAULT_SWITCH_OFF_THRESHOLD_W = 50.0
 DEFAULT_SWITCH_DEBOUNCE_S = 30
 DEFAULT_BATTERY_MAX_CHARGE_W = 5000.0
 DEFAULT_BATTERY_MAX_DISCHARGE_W = 5000.0
+DEFAULT_BATTERY_MIN_SOC = 10.0
+DEFAULT_BATTERY_MAX_SOC = 95.0
+
+# Battery control (reactive batteries)
+# Trust window for commanded-but-not-yet-measured battery response.  Within
+# this window the commanded delta is fed forward into the residual so the PID
+# does not double-correct; after it expires the measured power is the truth,
+# so a non-responsive battery cannot block curtailment forever.
+BATTERY_PENDING_S = 30.0
+# Skip battery setpoint writes smaller than this (avoids service-call spam).
+BATTERY_WRITE_THRESHOLD_W = 1.0
+
+# PV recovery: when reactive batteries have spare charge capacity and numeric
+# arrays are curtailed, bias the PID by this virtual import per cycle so
+# curtailed production is gradually recovered into the battery.
+PV_RECOVERY_STEP_W = 200.0
+# Recovery requires the batteries to actually track their commands; a larger
+# command-vs-measured mismatch blocks recovery (prevents a limit cycle
+# against a non-responsive battery).
+PV_RECOVERY_TRACKING_TOLERANCE_W = 100.0
 DEFAULT_AGGRESSIVENESS = "normal"
 DEFAULT_LOAD_PRIORITY = 50
 DEFAULT_LOAD_DEBOUNCE_S = 30
