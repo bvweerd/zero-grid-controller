@@ -489,8 +489,8 @@ async def test_numeric_load_priority_cascade_first_saturated(hass):
     assert pool_writes[0] > 0
 
 
-async def test_numeric_load_snap_up_over_absorbs(hass):
-    """Snap up to absolute_min_w can over-absorb surplus (remaining goes positive)."""
+async def test_numeric_load_stays_off_when_surplus_below_minimum(hass):
+    """A load with absolute_min_w does not turn on for surplus below that minimum."""
     entry = _make_entry(kp=1.0)
     entry.add_to_hass(hass)
 
@@ -507,16 +507,41 @@ async def test_numeric_load_snap_up_over_absorbs(hass):
     with patch.object(
         coordinator._actuators, "write_numeric_entity", new=AsyncMock()
     ) as mock_write:
-        # -300 W surplus: would request 1-2A, snap up to 6A (1380W) → over-absorbs
+        # -300 W surplus is below the 1380 W minimum → turning on would import
         remaining = await coordinator._engine._distribute_to_numeric_loads(
             -300.0, 0.0, coordinator.loads
         )
 
+    mock_write.assert_not_awaited()
+    assert remaining == -300.0
+
+
+async def test_numeric_load_turns_on_when_surplus_covers_minimum(hass):
+    """A load with absolute_min_w turns on once the surplus covers the minimum."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(
+            w_per_unit=230.0, absolute_min_w=1380.0, setpoint_min=0.0, setpoint_max=16.0
+        )
+    ]
+    coordinator._engine._current_load_setpoints["EV"] = 0.0
+    hass.states.async_set("number.ev", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        remaining = await coordinator._engine._distribute_to_numeric_loads(
+            -1500.0, 0.0, coordinator.loads
+        )
+
     mock_write.assert_awaited()
     written = mock_write.call_args[0][1]
-    assert written == 6.0  # snapped to minimum active setpoint
-    # remaining flips positive: EV absorbed 1380W but only 300W was requested
-    assert remaining > 0
+    # 1500 W / 230 W/A rounds to 7 A — above the 6 A minimum, so no snap needed
+    assert written == 7.0
+    assert remaining == -1500.0 + 7 * 230.0
 
 
 async def test_numeric_load_snap_down_over_releases(hass):

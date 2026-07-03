@@ -821,6 +821,15 @@ class ControlEngine:
                 available_w = load.headroom_increase_w(current)
                 if available_w <= 0:
                     continue
+                # Loads with a minimum active power only turn on when the
+                # surplus covers that minimum — otherwise snapping up to the
+                # minimum would create grid import.
+                if (
+                    load.absolute_min_w is not None
+                    and current * load.w_per_unit < load.absolute_min_w
+                    and -remaining < load.absolute_min_w
+                ):
+                    continue
                 take_w = min(available_w, -remaining)
                 delta_units = round(take_w / load.w_per_unit)
                 if delta_units == 0:
