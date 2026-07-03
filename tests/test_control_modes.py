@@ -139,14 +139,18 @@ async def test_zero_import_importing_is_active(hass):
 
 
 async def test_zero_import_exporting_is_idle(hass):
-    """When exporting (grid < 0), zero_import mode should be idle."""
+    """When exporting (grid < 0), zero_import reports the allowed-side status.
+
+    The PID still runs so surplus can be routed into controllable loads,
+    but with no loads configured nothing is actuated.
+    """
     entry = _make_entry(control_mode="zero_import")
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     _set_grid(hass, 0, 200)
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_EXPORT_OK
-    assert result.pid_output_w == 0.0
+    assert result.setpoints == {}
 
 
 async def test_zero_import_within_deadband_is_deadband(hass):
@@ -221,14 +225,18 @@ async def test_zero_export_exporting_is_active(hass):
 
 
 async def test_zero_export_importing_is_idle(hass):
-    """When importing (grid > 0), zero_export mode should be idle."""
+    """When importing (grid > 0), zero_export reports the allowed-side status.
+
+    The PID still runs so curtailed PV can be reopened, but with no arrays
+    configured nothing is actuated.
+    """
     entry = _make_entry(control_mode="zero_export")
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     _set_grid(hass, 200, 0)
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_IMPORT_OK
-    assert result.pid_output_w == 0.0
+    assert result.load_setpoints == {}
 
 
 async def test_zero_export_within_deadband_is_deadband(hass):
@@ -641,8 +649,12 @@ async def test_zero_import_idle_does_not_write_array_setpoints(hass):
     assert written == [], f"No array writes expected in idle, got: {written}"
 
 
-async def test_zero_export_idle_does_not_write_array_setpoints(hass):
-    """No array setpoint writes should happen when idle in zero_export mode."""
+async def test_zero_export_importing_reopens_curtailed_arrays(hass):
+    """Importing in zero_export mode reopens curtailed PV (free energy).
+
+    Previously the whole PID was skipped on the allowed side, so a single
+    export event left the arrays curtailed forever while importing.
+    """
     entry = _make_entry(
         control_mode="zero_export",
         subentries_data=(
@@ -655,7 +667,7 @@ async def test_zero_export_idle_does_not_write_array_setpoints(hass):
         ),
     )
     entry.add_to_hass(hass)
-    _set_grid(hass, 200, 0)  # importing → idle
+    _set_grid(hass, 200, 0)  # importing → allowed side
     _set_state(hass, "number.inverter_limit", 80)
 
     written: list[tuple[str, float]] = []
@@ -668,7 +680,113 @@ async def test_zero_export_idle_does_not_write_array_setpoints(hass):
 
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_IMPORT_OK
-    assert written == [], f"No array writes expected in idle, got: {written}"
+    assert written, "Curtailed PV must be reopened while importing"
+    assert written[0][1] > 80
+
+
+async def test_zero_export_importing_does_not_reduce_loads(hass):
+    """Importing in zero_export mode must not reduce controllable loads."""
+    entry = _make_entry(
+        control_mode="zero_export",
+        subentries_data=(
+            {
+                "subentry_id": "load1",
+                "subentry_type": LOAD_SUBENTRY_TYPE,
+                "title": "EV",
+                "data": {
+                    "load_name": "EV",
+                    "load_type": "numeric",
+                    "setpoint_entity": "number.ev",
+                    "setpoint_min": 0.0,
+                    "setpoint_max": 16.0,
+                    "w_per_unit": 230.0,
+                    "settling_time_s": 0,
+                    "load_priority": 10,
+                },
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._engine._current_load_setpoints["EV"] = 16.0  # charging full
+    _set_grid(hass, 2000, 0)  # importing → allowed in zero_export
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        result = await coordinator._async_update_data()
+
+    assert result.status == ControllerStatus.IDLE_IMPORT_OK
+    mock_write.assert_not_awaited()
+    assert coordinator._engine._current_load_setpoints["EV"] == 16.0
+
+
+async def test_zero_import_exporting_routes_surplus_into_loads(hass):
+    """Exporting in zero_import mode increases loads instead of doing nothing."""
+    entry = _make_entry(
+        control_mode="zero_import",
+        subentries_data=(
+            {
+                "subentry_id": "load1",
+                "subentry_type": LOAD_SUBENTRY_TYPE,
+                "title": "EV",
+                "data": {
+                    "load_name": "EV",
+                    "load_type": "numeric",
+                    "setpoint_entity": "number.ev",
+                    "setpoint_min": 0.0,
+                    "setpoint_max": 16.0,
+                    "w_per_unit": 230.0,
+                    "settling_time_s": 0,
+                    "load_priority": 10,
+                },
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._engine._current_load_setpoints["EV"] = 0.0
+    _set_state(hass, "number.ev", 0)
+    _set_grid(hass, 0, 2300)  # exporting → allowed in zero_import
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        result = await coordinator._async_update_data()
+
+    assert result.status == ControllerStatus.IDLE_EXPORT_OK
+    mock_write.assert_awaited()
+    assert coordinator._engine._current_load_setpoints["EV"] > 0.0
+
+
+async def test_zero_import_exporting_still_never_curtails_arrays(hass):
+    """Even with loads absorbing, arrays are never curtailed in zero_import."""
+    entry = _make_entry(
+        control_mode="zero_import",
+        subentries_data=(
+            {
+                "subentry_id": "arr1",
+                "subentry_type": ARRAY_SUBENTRY_TYPE,
+                "title": "Roof",
+                "data": _ARRAY_DATA,
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    _set_grid(hass, 0, 3000)  # big export, no loads to absorb it
+    _set_state(hass, "number.inverter_limit", 100)
+
+    written: list[tuple[str, float]] = []
+
+    async def _mock_write_setpoint(array_cfg, value: float) -> None:
+        written.append((array_cfg.setpoint_entity, value))
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._actuators.write_setpoint = _mock_write_setpoint
+
+    result = await coordinator._async_update_data()
+    assert result.status == ControllerStatus.IDLE_EXPORT_OK
+    assert written == [], f"Arrays must never be curtailed in zero_import: {written}"
 
 
 # ---------------------------------------------------------------------------
