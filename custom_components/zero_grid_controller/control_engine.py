@@ -103,6 +103,7 @@ class ControlEngine:
         self._settling_until: dict[str, float] = {}
         self._load_settling_until: dict[str, float] = {}
         self._battery_pending_until: dict[str, float] = {}
+        self._schedule_unavailable: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -298,8 +299,33 @@ class ControlEngine:
         # 5. Reactive battery state (pure reads) and PV recovery bias.
         # Recovery adds a virtual import so curtailed arrays gradually reopen
         # while reactive batteries still have spare charge capacity.
-        scheduled_batteries = [b for b in batteries if b.schedule_sensor_entity]
-        reactive_batteries = [b for b in batteries if not b.schedule_sensor_entity]
+        # A scheduled battery whose optimizer sensor is unavailable falls back
+        # to the reactive layer (SoC-aware, incremental) instead of silently
+        # degrading to correction-only control.
+        scheduled_batteries: list[BatteryConfig] = []
+        reactive_batteries: list[BatteryConfig] = []
+        schedule_values: dict[str, float] = {}
+        for battery in batteries:
+            if not battery.schedule_sensor_entity:
+                reactive_batteries.append(battery)
+                continue
+            schedule_w = self.read_power_w(battery.schedule_sensor_entity)
+            if schedule_w is None:
+                if battery.name not in self._schedule_unavailable:
+                    self._schedule_unavailable.add(battery.name)
+                    _LOGGER.warning(
+                        "Schedule sensor %s for battery %s is unavailable — "
+                        "falling back to reactive control",
+                        battery.schedule_sensor_entity,
+                        battery.name,
+                    )
+                reactive_batteries.append(battery)
+                continue
+            if battery.name in self._schedule_unavailable:
+                self._schedule_unavailable.discard(battery.name)
+                _LOGGER.info("Schedule sensor for battery %s recovered", battery.name)
+            schedule_values[battery.name] = schedule_w
+            scheduled_batteries.append(battery)
         battery_state = self._read_battery_states(reactive_batteries)
         recovery_w = self._pv_recovery_w(arrays, battery_state, filtered, now)
 
@@ -333,14 +359,11 @@ class ControlEngine:
 
         # 6. Scheduled batteries follow an external optimizer
         # (e.g. battery_controller) with a real-time grid correction on top.
+        scheduled_pending_w = 0.0
         if scheduled_batteries:
             total_scheduled_cap = sum(b.max_charge_w for b in scheduled_batteries)
             for battery in scheduled_batteries:
-                schedule_sensor = battery.schedule_sensor_entity
-                assert (
-                    schedule_sensor is not None
-                )  # guaranteed by list comprehension above
-                schedule_w = self.read_power_w(schedule_sensor) or 0.0
+                schedule_w = schedule_values[battery.name]
                 # Proportional reactive correction: adjusts schedule up/down based on
                 # the current grid error.  filtered > 0 → importing → push toward
                 # discharge (positive correction); filtered < 0 → exporting → push
@@ -350,21 +373,53 @@ class ControlEngine:
                     if total_scheduled_cap > 0
                     else 0.0
                 )
-                target = clamp(
-                    schedule_w + correction,
-                    -battery.max_charge_w,
-                    battery.max_discharge_w,
+                # SoC limits also bound the corrected target: no charging at
+                # or above max_soc, no discharging at or below min_soc.
+                soc = (
+                    self.read_sensor_safe(battery.soc_sensor_entity)
+                    if battery.soc_sensor_entity
+                    else None
                 )
-                try:
-                    await self._actuators.write_numeric_entity(
-                        battery.setpoint_entity, target
-                    )
-                except Exception:
-                    _LOGGER.exception(
-                        "Failed to write schedule setpoint for %s", battery.name
-                    )
-                else:
+                lower = (
+                    0.0
+                    if soc is not None and soc >= battery.max_soc
+                    else -battery.max_charge_w
+                )
+                upper = (
+                    0.0
+                    if soc is not None and soc <= battery.min_soc
+                    else battery.max_discharge_w
+                )
+                target = clamp(schedule_w + correction, lower, upper)
+
+                actual = self.read_power_w(battery.sensor_entity)
+                if actual is None:
+                    actual = self._current_battery_setpoints.get(battery.name, 0.0)
+
+                previous = self._current_battery_setpoints.get(battery.name)
+                if (
+                    previous is None
+                    or abs(target - previous) >= BATTERY_WRITE_THRESHOLD_W
+                ):
+                    try:
+                        await self._actuators.write_numeric_entity(
+                            battery.setpoint_entity, target
+                        )
+                    except Exception:
+                        _LOGGER.exception(
+                            "Failed to write schedule setpoint for %s", battery.name
+                        )
+                        continue
                     self._current_battery_setpoints[battery.name] = target
+                    self._battery_pending_until[battery.name] = now + BATTERY_PENDING_S
+
+                # Feed the commanded-but-not-yet-measured battery response
+                # forward so the PID does not correct the same grid error a
+                # second time (which oscillates: combined loop gain ≈ 2).
+                if now < self._battery_pending_until.get(battery.name, 0.0):
+                    scheduled_pending_w += (
+                        self._current_battery_setpoints.get(battery.name, 0.0) - actual
+                    )
 
         # 6b. Reactive battery layer: incremental command, returns the grid
         # residual with the still-pending battery response fed forward so
@@ -374,6 +429,7 @@ class ControlEngine:
         residual = await self._command_batteries(
             filtered, now, reactive_batteries, battery_state, arrays, loads
         )
+        residual -= scheduled_pending_w
         residual += recovery_w
 
         # 7. PID + actuator distribution (skipped in one-sided idle modes)
