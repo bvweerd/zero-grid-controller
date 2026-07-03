@@ -15,6 +15,7 @@ from .const import (
     AGGRESSIVENESS_FACTORS,
     AGGRESSIVENESS_KI_RATIO,
     CALIB_INTER_ARRAY_SLEEP_S,
+    CALIB_MAX_GRID_W,
     CALIB_MAX_TIME_S,
     CALIB_MIN_W_PER_UNIT,
     CALIB_SETTLING_CONFIRM_COUNT,
@@ -27,6 +28,10 @@ from .const import (
 from .sensor_reader import SensorReader
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _GridLimitExceeded(Exception):
+    """Grid power exceeded the calibration safety limit."""
 
 
 @dataclass
@@ -47,6 +52,7 @@ class CalibrationResult:
 
 WriteSetpointFn = Callable[[ArrayConfig, float], Awaitable[None]]
 OnArrayDoneFn = Callable[[int, int], None]
+ReadGridFn = Callable[[], Awaitable[float | None]]
 
 
 class ArrayCalibrator:
@@ -61,6 +67,7 @@ class ArrayCalibrator:
         write_setpoint: WriteSetpointFn,
         sensor_reader: SensorReader | None = None,
         on_array_done: OnArrayDoneFn | None = None,
+        read_grid: ReadGridFn | None = None,
     ) -> None:
         self._hass = hass
         self._arrays = arrays
@@ -69,6 +76,7 @@ class ArrayCalibrator:
         self._write_setpoint = write_setpoint
         self._sensor_reader = sensor_reader
         self._on_array_done = on_array_done
+        self._read_grid = read_grid
         self._abort = False
 
     def abort(self) -> None:
@@ -146,6 +154,11 @@ class ArrayCalibrator:
                 return self._failed(
                     array, "Power sensor did not settle after returning to 30%"
                 )
+        except _GridLimitExceeded:
+            return self._failed(
+                array,
+                f"Aborted: |grid| exceeded {CALIB_MAX_GRID_W:.0f} W during calibration",
+            )
         finally:
             await self._write_setpoint(array, start_sp)
             self._current_setpoints[array.name] = start_sp
@@ -195,6 +208,11 @@ class ArrayCalibrator:
         while elapsed < CALIB_MAX_TIME_S:
             await asyncio.sleep(CONTROL_INTERVAL_S)
             elapsed += CONTROL_INTERVAL_S
+
+            if self._read_grid is not None:
+                grid = await self._read_grid()
+                if grid is not None and abs(grid) > CALIB_MAX_GRID_W:
+                    raise _GridLimitExceeded
 
             power = self._read_power_sensor(array.power_sensor_entity)
             if power is None:

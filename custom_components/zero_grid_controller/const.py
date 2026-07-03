@@ -104,14 +104,10 @@ DEFAULT_LOAD_PRIORITY = 50
 DEFAULT_LOAD_DEBOUNCE_S = 30
 
 # Calibration constants
-CALIB_MAX_GRID_W = 3000.0  # Abort if |grid_w| exceeds this
+CALIB_MAX_GRID_W = 3000.0  # Abort if |grid_w| exceeds this during calibration
 CALIB_MAX_TIME_S = 90  # Maximum seconds per array
-CALIB_BASELINE_SAMPLES = 10  # Samples for baseline measurement
 CALIB_SETTLING_CONFIRM_COUNT = 3  # Consecutive stable samples to confirm settling
 CALIB_SETTLING_THRESHOLD_W = 5.0  # Max grid deviation to be considered settled
-CALIB_STEP_RATIO = 0.10  # Step size as fraction of setpoint range
-CALIB_STEP_MIN = 2  # Minimum step size in setpoint units
-CALIB_STEP_MAX = 20  # Maximum step size in setpoint units
 CALIB_MIN_W_PER_UNIT = 0.5  # Below this → calibration failed
 CALIB_INTER_ARRAY_SLEEP_S = 15  # Pause between arrays
 CALIB_SETTLING_MIN_S = 3
