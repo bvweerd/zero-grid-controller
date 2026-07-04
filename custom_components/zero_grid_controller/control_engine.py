@@ -105,6 +105,7 @@ class ControlEngine:
         self._load_settling_until: dict[str, float] = {}
         self._battery_pending_until: dict[str, float] = {}
         self._schedule_unavailable: set[str] = set()
+        self._soc_unavailable: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -450,21 +451,22 @@ class ControlEngine:
         pid_output = self._pid.compute(-residual, dt)
 
         # Back-calculation anti-windup (sign contradiction):
-        # When the integral has wound up so far that it opposes the actual
-        # grid direction, immediately reset it and use the P-only output for
+        # When the integral has wound up so far that it opposes the residual
+        # the PID acts on, immediately reset it and use the P-only output for
         # this cycle.  Threshold of 3×deadband avoids triggering on normal
         # near-zero oscillation.
         if abs(pid_output) > 3 * self._deadband_w:
-            wrong_direction = (pid_output < 0 and filtered > self._deadband_w) or (
-                pid_output > 0 and filtered < -self._deadband_w
+            wrong_direction = (pid_output < 0 and residual > self._deadband_w) or (
+                pid_output > 0 and residual < -self._deadband_w
             )
             if wrong_direction:
                 p_only = self._pid.kp * residual
                 _LOGGER.info(
                     "Integrator wind-up corrected: output %.0f W → %.0f W"
-                    " (grid %.1f W)",
+                    " (residual %.1f W, grid %.1f W)",
                     pid_output,
                     p_only,
+                    residual,
                     filtered,
                 )
                 self._pid.set_integral(0.0)
@@ -575,6 +577,18 @@ class ControlEngine:
                 if battery.soc_sensor_entity
                 else None
             )
+            if battery.soc_sensor_entity and soc is None:
+                if battery.name not in self._soc_unavailable:
+                    self._soc_unavailable.add(battery.name)
+                    _LOGGER.warning(
+                        "SoC sensor %s for battery %s is unavailable — "
+                        "SoC limits are not enforced until it recovers",
+                        battery.soc_sensor_entity,
+                        battery.name,
+                    )
+            elif battery.name in self._soc_unavailable:
+                self._soc_unavailable.discard(battery.name)
+                _LOGGER.info("SoC sensor for battery %s recovered", battery.name)
             state.charge_caps[battery.name] = (
                 0.0
                 if soc is not None and soc >= battery.max_soc
@@ -587,6 +601,22 @@ class ControlEngine:
             )
         return state
 
+    def _load_level(self, load: LoadConfig) -> float:
+        """Current load level, reading the entity when not yet initialised.
+
+        Prevents a load that is physically running (e.g. an EV charging
+        right after a restart) from being treated as off before the engine
+        has seen it, which would allow battery discharge into a reducible
+        load.
+        """
+        known = self._current_load_setpoints.get(load.name)
+        if known is not None:
+            return known
+        if load.is_switch:
+            return 1.0 if self.entity_state(load.setpoint_entity) == "on" else 0.0
+        value = self.read_sensor_safe(load.setpoint_entity)
+        return value if value is not None else load.setpoint_min
+
     def _discharge_allowed(
         self, arrays: list[ArrayConfig], loads: list[LoadConfig]
     ) -> bool:
@@ -597,8 +627,7 @@ class ControlEngine:
             for a in numeric_arrays
         )
         loads_off = all(
-            self._current_load_setpoints.get(ld.name, 0.0)
-            <= (0.0 if ld.is_switch else ld.setpoint_min)
+            self._load_level(ld) <= (0.0 if ld.is_switch else ld.setpoint_min)
             for ld in loads
         )
         return arrays_maxed and loads_off
@@ -1023,7 +1052,11 @@ class ControlEngine:
             else:
                 continue
 
-            await self._actuators.write_setpoint(array, new_sp)
+            try:
+                await self._actuators.write_setpoint(array, new_sp)
+            except Exception:
+                _LOGGER.exception("Failed to toggle switch array %s", array.name)
+                continue
             self._current_setpoints[array.name] = new_sp
             self._settling_until[array.name] = now + array.switch_debounce_s
             residual += residual_delta
