@@ -343,19 +343,29 @@ class ControlEngine:
                 load_setpoints=dict(self._current_load_setpoints),
             )
 
-        # 5b. Mode idle check — only activate PID on the "forbidden" side
-        skip_pid = False
+        # 5b. Mode check — on the "allowed" side only a safe subset of the
+        # actuators participates.  Opening our own PV on import is always
+        # free energy and routing surplus into loads on export is always
+        # useful; what the one-sided modes skip is fighting the allowed
+        # direction (reducing loads in zero_export, curtailing PV in
+        # zero_import).  Previously the whole PID was skipped, which left
+        # PV curtailed forever in zero_export once a single export event
+        # had occurred (nothing ever reopened it while importing).
+        allow_arrays = True
+        allow_loads = True
         cycle_status: ControllerStatus = STATUS_ACTIVE
         if self._mode == ControllerMode.ZERO_IMPORT and filtered < -self._deadband_w:
-            # Exporting: allowed direction — idle, battery charge layer still runs below
-            self._pid.freeze_integrator()
-            skip_pid = True
+            # Exporting is allowed: never curtail PV, but do route the
+            # surplus into controllable loads (battery layer runs below).
+            allow_arrays = False
             cycle_status = ControllerStatus.IDLE_EXPORT_OK
         elif self._mode == ControllerMode.ZERO_EXPORT and filtered > self._deadband_w:
-            # Importing: allowed direction — idle, battery discharge layer still runs below
-            self._pid.freeze_integrator()
-            skip_pid = True
+            # Importing is allowed: never reduce loads for it, but do reopen
+            # curtailed PV (battery layer runs below).
+            allow_loads = False
             cycle_status = ControllerStatus.IDLE_IMPORT_OK
+        arrays_active = arrays if allow_arrays else []
+        loads_active = loads if allow_loads else []
 
         # 6. Scheduled batteries follow an external optimizer
         # (e.g. battery_controller) with a real-time grid correction on top.
@@ -432,84 +442,83 @@ class ControlEngine:
         residual -= scheduled_pending_w
         residual += recovery_w
 
-        # 7. PID + actuator distribution (skipped in one-sided idle modes)
-        pid_output = 0.0
-        if not skip_pid:
-            # 7a. PID on residual
-            # Negate: positive output when importing (open PV / reduce load)
-            pid_output = self._pid.compute(-residual, dt)
+        # 7. PID + actuator distribution (restricted to the allowed actuator
+        # subset in one-sided modes)
+        # 7a. PID on residual
+        # Negate: positive output when importing (open PV / reduce load)
+        pid_output = self._pid.compute(-residual, dt)
 
-            # Back-calculation anti-windup (sign contradiction):
-            # When the integral has wound up so far that it opposes the actual
-            # grid direction, immediately reset it and use the P-only output for
-            # this cycle.  Threshold of 3×deadband avoids triggering on normal
-            # near-zero oscillation.
-            if abs(pid_output) > 3 * self._deadband_w:
-                wrong_direction = (pid_output < 0 and filtered > self._deadband_w) or (
-                    pid_output > 0 and filtered < -self._deadband_w
+        # Back-calculation anti-windup (sign contradiction):
+        # When the integral has wound up so far that it opposes the actual
+        # grid direction, immediately reset it and use the P-only output for
+        # this cycle.  Threshold of 3×deadband avoids triggering on normal
+        # near-zero oscillation.
+        if abs(pid_output) > 3 * self._deadband_w:
+            wrong_direction = (pid_output < 0 and filtered > self._deadband_w) or (
+                pid_output > 0 and filtered < -self._deadband_w
+            )
+            if wrong_direction:
+                p_only = self._pid.kp * residual
+                _LOGGER.info(
+                    "Integrator wind-up corrected: output %.0f W → %.0f W"
+                    " (grid %.1f W)",
+                    pid_output,
+                    p_only,
+                    filtered,
                 )
-                if wrong_direction:
-                    p_only = self._pid.kp * residual
-                    _LOGGER.info(
-                        "Integrator wind-up corrected: output %.0f W → %.0f W"
-                        " (grid %.1f W)",
-                        pid_output,
-                        p_only,
-                        filtered,
-                    )
-                    self._pid.set_integral(0.0)
-                    pid_output = p_only
+                self._pid.set_integral(0.0)
+                pid_output = p_only
 
-            # 7b. Numeric correction
-            _load_sp_before = {
-                ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
-                for ld in loads
-                if not ld.is_switch
-            }
-            _load_w_per_unit = {
-                ld.name: ld.w_per_unit for ld in loads if not ld.is_switch
-            }
+        # 7b. Numeric correction
+        _load_sp_before = {
+            ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
+            for ld in loads_active
+            if not ld.is_switch
+        }
+        _load_w_per_unit = {
+            ld.name: ld.w_per_unit for ld in loads_active if not ld.is_switch
+        }
 
-            if pid_output < 0:
-                # Exporting surplus → increase loads, then curtail arrays
-                after_loads = await self._distribute_to_numeric_loads(
-                    pid_output, now, loads
-                )
-                final_remaining = await self._distribute_to_numeric_arrays(
-                    after_loads, now, arrays
-                )
-                array_absorbed_w = after_loads - final_remaining
-            else:
-                # Importing deficit → open arrays, then reduce loads
-                after_arrays = await self._distribute_to_numeric_arrays(
-                    pid_output, now, arrays
-                )
-                array_absorbed_w = pid_output - after_arrays
-                final_remaining = await self._distribute_to_numeric_loads(
-                    after_arrays, now, loads
-                )
-
-            # Saturation anti-windup: freeze integrator when actuators cannot
-            # absorb the requested correction (settling timers or at physical
-            # limits).  Prevents further wind-up while the system is saturated.
-            if abs(pid_output) > 1.0 and abs(final_remaining) >= 0.95 * abs(pid_output):
-                self._pid.freeze_integrator()
-
-            # Actual watts absorbed by numeric loads in this cycle
-            load_absorbed_w = sum(
-                (self._current_load_setpoints.get(name, before) - before)
-                * _load_w_per_unit[name]
-                for name, before in _load_sp_before.items()
+        if pid_output < 0:
+            # Exporting surplus → increase loads, then curtail arrays
+            after_loads = await self._distribute_to_numeric_loads(
+                pid_output, now, loads_active
+            )
+            final_remaining = await self._distribute_to_numeric_arrays(
+                after_loads, now, arrays_active
+            )
+            array_absorbed_w = after_loads - final_remaining
+        else:
+            # Importing deficit → open arrays, then reduce loads
+            after_arrays = await self._distribute_to_numeric_arrays(
+                pid_output, now, arrays_active
+            )
+            array_absorbed_w = pid_output - after_arrays
+            final_remaining = await self._distribute_to_numeric_loads(
+                after_arrays, now, loads_active
             )
 
-            # 7c. Switch loads: feedforward of numeric load AND array changes
-            # so switch decisions do not double-take corrections made this cycle
-            residual = await self._apply_load_switch_hysteresis(
-                residual + load_absorbed_w - array_absorbed_w, now, loads
-            )
+        # Saturation anti-windup: freeze integrator when actuators cannot
+        # absorb the requested correction (settling timers or at physical
+        # limits).  Prevents further wind-up while the system is saturated.
+        if abs(pid_output) > 1.0 and abs(final_remaining) >= 0.95 * abs(pid_output):
+            self._pid.freeze_integrator()
 
-            # 7d. Switch arrays: hysteresis on updated residual
-            residual = await self._apply_switch_hysteresis(residual, now, arrays)
+        # Actual watts absorbed by numeric loads in this cycle
+        load_absorbed_w = sum(
+            (self._current_load_setpoints.get(name, before) - before)
+            * _load_w_per_unit[name]
+            for name, before in _load_sp_before.items()
+        )
+
+        # 7c. Switch loads: feedforward of numeric load AND array changes
+        # so switch decisions do not double-take corrections made this cycle
+        residual = await self._apply_load_switch_hysteresis(
+            residual + load_absorbed_w - array_absorbed_w, now, loads_active
+        )
+
+        # 7d. Switch arrays: hysteresis on updated residual
+        residual = await self._apply_switch_hysteresis(residual, now, arrays_active)
 
         return ControlCycleResult(
             grid_raw_w=grid_raw,
