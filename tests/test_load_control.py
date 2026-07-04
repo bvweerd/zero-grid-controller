@@ -853,3 +853,95 @@ async def test_full_cycle_numeric_load_reduces_on_import(hass):
     mock_num.assert_awaited()
     written = mock_num.call_args[0][1]
     assert written < 10.0
+
+
+# ---------------------------------------------------------------------------
+# Switch load off-hysteresis and feedforward regressions
+# ---------------------------------------------------------------------------
+
+
+async def test_switch_load_stays_on_within_off_margin(hass):
+    """A small import below the off-margin must not flap the load off.
+
+    After turn-on the residual sits at ~0 W — exactly the old off-threshold —
+    so any noise beyond the deadband toggled the load off again (up to two
+    switch actions per minute with the default 30 s debounce).
+    """
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=0)]
+    coordinator._engine._current_load_setpoints["Boiler"] = 1.0  # on
+    hass.states.async_set("switch.boiler", "on")
+
+    # 150 W import: beyond the deadband but well below 10% of 2000 W
+    hass.states.async_set("sensor.grid_import", "150")
+    hass.states.async_set("sensor.grid_export", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_switch_entity", new=AsyncMock()
+    ) as mock_switch:
+        await coordinator._async_update_data()
+
+    mock_switch.assert_not_awaited()
+    assert coordinator._engine._current_load_setpoints["Boiler"] == 1.0
+
+
+async def test_switch_load_turns_off_beyond_off_margin(hass):
+    """Import beyond the off-margin still turns the load off."""
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [_switch_load(power_w=2000.0, switch_debounce_s=0)]
+    coordinator._engine._current_load_setpoints["Boiler"] = 1.0  # on
+    hass.states.async_set("switch.boiler", "on")
+
+    # 400 W import: beyond 10% of 2000 W → turn off
+    hass.states.async_set("sensor.grid_import", "400")
+    hass.states.async_set("sensor.grid_export", "0")
+
+    with patch.object(
+        coordinator._actuators, "write_switch_entity", new=AsyncMock()
+    ) as mock_switch:
+        await coordinator._async_update_data()
+
+    mock_switch.assert_awaited()
+    assert coordinator._engine._current_load_setpoints["Boiler"] == 0.0
+
+
+async def test_no_phantom_feedforward_on_first_cycle(hass):
+    """A load initialised from its entity state mid-cycle must not produce a
+    phantom feedforward that blocks switch-load decisions.
+
+    Scenario: the EV is already charging at 16 A (entity state) but the
+    engine has not seen it yet. With the old snapshot-based accounting the
+    'before' value defaulted to setpoint_min, producing a fictitious
+    +3680 W absorption that suppressed the boiler turn-on.
+    """
+    entry = _make_entry(kp=1.0)
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator.loads = [
+        _numeric_load(
+            w_per_unit=230.0, setpoint_min=0.0, setpoint_max=16.0, settling_time_s=0
+        ),
+        _switch_load(power_w=2000.0, switch_debounce_s=0, priority=2),
+    ]
+    # EV entity is at max already; engine state is uninitialised
+    hass.states.async_set("number.ev", "16")
+    hass.states.async_set("switch.boiler", "off")
+
+    # 2500 W export: EV cannot take more (at max), boiler (2000 W) must turn on
+    hass.states.async_set("sensor.grid_import", "0")
+    hass.states.async_set("sensor.grid_export", "2500")
+
+    with (
+        patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()),
+        patch.object(
+            coordinator._actuators, "write_switch_entity", new=AsyncMock()
+        ) as mock_switch,
+    ):
+        await coordinator._async_update_data()
+
+    mock_switch.assert_awaited()
+    assert coordinator._engine._current_load_setpoints["Boiler"] == 1.0
