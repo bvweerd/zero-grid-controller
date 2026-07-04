@@ -22,6 +22,7 @@ from .const import (
     STATUS_ACTIVE,
     STATUS_DEADBAND,
     STATUS_DISABLED,
+    SWITCH_LOAD_OFF_FRACTION,
     ControllerMode,
     ControllerStatus,
 )
@@ -469,21 +470,15 @@ class ControlEngine:
                 self._pid.set_integral(0.0)
                 pid_output = p_only
 
-        # 7b. Numeric correction
-        _load_sp_before = {
-            ld.name: self._current_load_setpoints.get(ld.name, ld.setpoint_min)
-            for ld in loads_active
-            if not ld.is_switch
-        }
-        _load_w_per_unit = {
-            ld.name: ld.w_per_unit for ld in loads_active if not ld.is_switch
-        }
-
+        # 7b. Numeric correction; absorption is derived from the
+        # distribution return values so a load initialised from its
+        # entity state mid-cycle does not produce a phantom feedforward.
         if pid_output < 0:
             # Exporting surplus → increase loads, then curtail arrays
             after_loads = await self._distribute_to_numeric_loads(
                 pid_output, now, loads_active
             )
+            load_absorbed_w = after_loads - pid_output
             final_remaining = await self._distribute_to_numeric_arrays(
                 after_loads, now, arrays_active
             )
@@ -497,19 +492,13 @@ class ControlEngine:
             final_remaining = await self._distribute_to_numeric_loads(
                 after_arrays, now, loads_active
             )
+            load_absorbed_w = final_remaining - after_arrays
 
         # Saturation anti-windup: freeze integrator when actuators cannot
         # absorb the requested correction (settling timers or at physical
         # limits).  Prevents further wind-up while the system is saturated.
         if abs(pid_output) > 1.0 and abs(final_remaining) >= 0.95 * abs(pid_output):
             self._pid.freeze_integrator()
-
-        # Actual watts absorbed by numeric loads in this cycle
-        load_absorbed_w = sum(
-            (self._current_load_setpoints.get(name, before) - before)
-            * _load_w_per_unit[name]
-            for name, before in _load_sp_before.items()
-        )
 
         # 7c. Switch loads: feedforward of numeric load AND array changes
         # so switch decisions do not double-take corrections made this cycle
@@ -986,7 +975,7 @@ class ControlEngine:
                 self._current_load_setpoints[load.name] = 1.0
                 self._load_settling_until[load.name] = now + load.switch_debounce_s
                 residual += load.power_w
-            elif is_on and residual >= 0:
+            elif is_on and residual >= SWITCH_LOAD_OFF_FRACTION * load.power_w:
                 try:
                     await self._actuators.write_switch_entity(
                         load.setpoint_entity, False

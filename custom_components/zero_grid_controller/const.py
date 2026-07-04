@@ -103,6 +103,12 @@ DEFAULT_AGGRESSIVENESS = "normal"
 DEFAULT_LOAD_PRIORITY = 50
 DEFAULT_LOAD_DEBOUNCE_S = 30
 
+# Switch loads: once on, only turn off when grid import exceeds this fraction
+# of the load's fixed power.  After turn-on the residual sits at ~0 W, which
+# is exactly the old off-threshold — any noise beyond the deadband flapped
+# the load off again.
+SWITCH_LOAD_OFF_FRACTION = 0.1
+
 # Failsafe behaviour when grid sensors are unavailable / controller disabled
 CONF_FAILSAFE_MODE = "failsafe_mode"
 FAILSAFE_MODE_MAXIMIZE = "maximize"  # PV to max (self-consumption setups)
