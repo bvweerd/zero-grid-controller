@@ -285,3 +285,46 @@ async def test_calibration_uses_slower_return_direction_for_settling_time():
     # Raw slowest settling = 25 s (return direction took 5 samples × 5 s).
     # Stored value includes the 1.5× safety margin: int(25 * 1.5) = 37 s.
     assert result.settling_time_s == pytest.approx(37)
+
+
+async def test_calibration_aborts_when_grid_limit_exceeded():
+    """Calibration fails the array when |grid| exceeds CALIB_MAX_GRID_W."""
+    array = _make_array()
+    readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    calibrator, write_setpoint, advance = _calibrator([array], readings)
+
+    async def read_grid() -> float:
+        return 5000.0  # way beyond CALIB_MAX_GRID_W
+
+    calibrator._read_grid = read_grid
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
+        result = (await calibrator.run())[0]
+
+    assert result.success is False
+    assert "exceeded" in result.message
+    # Original setpoint restored despite the abort
+    write_setpoint.assert_awaited_with(array, array.setpoint_max)
+
+
+async def test_calibration_grid_guard_ignores_unavailable_grid():
+    """A grid read returning None must not abort calibration."""
+    array = _make_array()
+    readings = {"sensor.pv_west_power": _stable_midpoint_readings()}
+    calibrator, _, advance = _calibrator([array], readings)
+
+    async def read_grid() -> None:
+        return None
+
+    calibrator._read_grid = read_grid
+
+    async def fake_sleep(_secs):
+        advance("sensor.pv_west_power")
+
+    with patch("asyncio.sleep", new=fake_sleep):
+        result = (await calibrator.run())[0]
+
+    assert result.success is True

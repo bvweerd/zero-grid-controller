@@ -10,12 +10,17 @@ from typing import Any
 from .const import (
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
+    CONF_BATTERY_MAX_SOC,
+    CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_SCHEDULE_SENSOR,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_NAME,
     DEFAULT_BATTERY_MAX_CHARGE_W,
     DEFAULT_BATTERY_MAX_DISCHARGE_W,
+    DEFAULT_BATTERY_MAX_SOC,
+    DEFAULT_BATTERY_MIN_SOC,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +37,9 @@ class BatteryConfig:
     max_discharge_w: float
     setpoint_entity: str
     schedule_sensor_entity: str | None = None
+    soc_sensor_entity: str | None = None
+    min_soc: float = DEFAULT_BATTERY_MIN_SOC
+    max_soc: float = DEFAULT_BATTERY_MAX_SOC
 
 
 def battery_config_from_subentry(
@@ -52,4 +60,7 @@ def battery_config_from_subentry(
         ),
         setpoint_entity=data[CONF_BATTERY_SETPOINT_ENTITY],
         schedule_sensor_entity=schedule_sensor if schedule_sensor else None,
+        soc_sensor_entity=data.get(CONF_BATTERY_SOC_SENSOR) or None,
+        min_soc=float(data.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)),
+        max_soc=float(data.get(CONF_BATTERY_MAX_SOC, DEFAULT_BATTERY_MAX_SOC)),
     )

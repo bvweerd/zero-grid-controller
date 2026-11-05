@@ -228,9 +228,10 @@ async def test_array_settling_uses_correct_direction(hass):
 # ---------------------------------------------------------------------------
 
 
-async def test_battery_setpoint_resets_on_grid_reversal(hass):
-    """When grid transitions from exporting (neg) to importing (pos), battery
-    charge setpoints are reset to 0 (or positive for discharge)."""
+async def test_battery_setpoint_backs_off_on_grid_reversal(hass):
+    """When grid flips from exporting to importing while charging, the charge
+    command backs off incrementally: measured battery power plus the grid
+    error, never a hard reset to 0 (which would swing the grid to export)."""
     entry = _make_entry(deadband_w=5.0, ewm_alpha=1.0)
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
@@ -269,9 +270,12 @@ async def test_battery_setpoint_resets_on_grid_reversal(hass):
 
     assert result2.status == STATUS_ACTIVE
     battery_sp_after = result2.battery_setpoints.get("Battery", -999.0)
-    assert battery_sp_after >= 0, (
-        f"On import, battery charge setpoint must be reset to 0 or positive "
-        f"(discharge), got {battery_sp_after}"
+    # Battery sensor is unavailable → measured falls back to the commanded
+    # -500 W. With 200 W import the real surplus is 300 W, so the charge
+    # command backs off to -300 W instead of resetting to 0.
+    assert battery_sp_after == -300.0, (
+        f"On import while charging, the charge setpoint must back off "
+        f"incrementally (expected -300.0), got {battery_sp_after}"
     )
 
 

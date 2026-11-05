@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -137,14 +139,18 @@ async def test_zero_import_importing_is_active(hass):
 
 
 async def test_zero_import_exporting_is_idle(hass):
-    """When exporting (grid < 0), zero_import mode should be idle."""
+    """When exporting (grid < 0), zero_import reports the allowed-side status.
+
+    The PID still runs so surplus can be routed into controllable loads,
+    but with no loads configured nothing is actuated.
+    """
     entry = _make_entry(control_mode="zero_import")
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     _set_grid(hass, 0, 200)
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_EXPORT_OK
-    assert result.pid_output_w == 0.0
+    assert result.setpoints == {}
 
 
 async def test_zero_import_within_deadband_is_deadband(hass):
@@ -219,14 +225,18 @@ async def test_zero_export_exporting_is_active(hass):
 
 
 async def test_zero_export_importing_is_idle(hass):
-    """When importing (grid > 0), zero_export mode should be idle."""
+    """When importing (grid > 0), zero_export reports the allowed-side status.
+
+    The PID still runs so curtailed PV can be reopened, but with no arrays
+    configured nothing is actuated.
+    """
     entry = _make_entry(control_mode="zero_export")
     entry.add_to_hass(hass)
     coordinator = ZeroGridCoordinator(hass, entry)
     _set_grid(hass, 200, 0)
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_IMPORT_OK
-    assert result.pid_output_w == 0.0
+    assert result.load_setpoints == {}
 
 
 async def test_zero_export_within_deadband_is_deadband(hass):
@@ -639,8 +649,12 @@ async def test_zero_import_idle_does_not_write_array_setpoints(hass):
     assert written == [], f"No array writes expected in idle, got: {written}"
 
 
-async def test_zero_export_idle_does_not_write_array_setpoints(hass):
-    """No array setpoint writes should happen when idle in zero_export mode."""
+async def test_zero_export_importing_reopens_curtailed_arrays(hass):
+    """Importing in zero_export mode reopens curtailed PV (free energy).
+
+    Previously the whole PID was skipped on the allowed side, so a single
+    export event left the arrays curtailed forever while importing.
+    """
     entry = _make_entry(
         control_mode="zero_export",
         subentries_data=(
@@ -653,7 +667,7 @@ async def test_zero_export_idle_does_not_write_array_setpoints(hass):
         ),
     )
     entry.add_to_hass(hass)
-    _set_grid(hass, 200, 0)  # importing → idle
+    _set_grid(hass, 200, 0)  # importing → allowed side
     _set_state(hass, "number.inverter_limit", 80)
 
     written: list[tuple[str, float]] = []
@@ -666,4 +680,223 @@ async def test_zero_export_idle_does_not_write_array_setpoints(hass):
 
     result = await coordinator._async_update_data()
     assert result.status == ControllerStatus.IDLE_IMPORT_OK
-    assert written == [], f"No array writes expected in idle, got: {written}"
+    assert written, "Curtailed PV must be reopened while importing"
+    assert written[0][1] > 80
+
+
+async def test_zero_export_importing_does_not_reduce_loads(hass):
+    """Importing in zero_export mode must not reduce controllable loads."""
+    entry = _make_entry(
+        control_mode="zero_export",
+        subentries_data=(
+            {
+                "subentry_id": "load1",
+                "subentry_type": LOAD_SUBENTRY_TYPE,
+                "title": "EV",
+                "data": {
+                    "load_name": "EV",
+                    "load_type": "numeric",
+                    "setpoint_entity": "number.ev",
+                    "setpoint_min": 0.0,
+                    "setpoint_max": 16.0,
+                    "w_per_unit": 230.0,
+                    "settling_time_s": 0,
+                    "load_priority": 10,
+                },
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._engine._current_load_setpoints["EV"] = 16.0  # charging full
+    _set_grid(hass, 2000, 0)  # importing → allowed in zero_export
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        result = await coordinator._async_update_data()
+
+    assert result.status == ControllerStatus.IDLE_IMPORT_OK
+    mock_write.assert_not_awaited()
+    assert coordinator._engine._current_load_setpoints["EV"] == 16.0
+
+
+async def test_zero_import_exporting_routes_surplus_into_loads(hass):
+    """Exporting in zero_import mode increases loads instead of doing nothing."""
+    entry = _make_entry(
+        control_mode="zero_import",
+        subentries_data=(
+            {
+                "subentry_id": "load1",
+                "subentry_type": LOAD_SUBENTRY_TYPE,
+                "title": "EV",
+                "data": {
+                    "load_name": "EV",
+                    "load_type": "numeric",
+                    "setpoint_entity": "number.ev",
+                    "setpoint_min": 0.0,
+                    "setpoint_max": 16.0,
+                    "w_per_unit": 230.0,
+                    "settling_time_s": 0,
+                    "load_priority": 10,
+                },
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._engine._current_load_setpoints["EV"] = 0.0
+    _set_state(hass, "number.ev", 0)
+    _set_grid(hass, 0, 2300)  # exporting → allowed in zero_import
+
+    with patch.object(
+        coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+    ) as mock_write:
+        result = await coordinator._async_update_data()
+
+    assert result.status == ControllerStatus.IDLE_EXPORT_OK
+    mock_write.assert_awaited()
+    assert coordinator._engine._current_load_setpoints["EV"] > 0.0
+
+
+async def test_zero_import_exporting_still_never_curtails_arrays(hass):
+    """Even with loads absorbing, arrays are never curtailed in zero_import."""
+    entry = _make_entry(
+        control_mode="zero_import",
+        subentries_data=(
+            {
+                "subentry_id": "arr1",
+                "subentry_type": ARRAY_SUBENTRY_TYPE,
+                "title": "Roof",
+                "data": _ARRAY_DATA,
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    _set_grid(hass, 0, 3000)  # big export, no loads to absorb it
+    _set_state(hass, "number.inverter_limit", 100)
+
+    written: list[tuple[str, float]] = []
+
+    async def _mock_write_setpoint(array_cfg, value: float) -> None:
+        written.append((array_cfg.setpoint_entity, value))
+
+    coordinator = ZeroGridCoordinator(hass, entry)
+    coordinator._actuators.write_setpoint = _mock_write_setpoint
+
+    result = await coordinator._async_update_data()
+    assert result.status == ControllerStatus.IDLE_EXPORT_OK
+    assert written == [], f"Arrays must never be curtailed in zero_import: {written}"
+
+
+# ---------------------------------------------------------------------------
+# Maximize modes: SoC limits and write-if-changed
+# ---------------------------------------------------------------------------
+
+
+def _battery_subentry(**extra):
+    return {
+        "data": {**_BATTERY_DATA, **extra},
+        "subentry_type": BATTERY_SUBENTRY_TYPE,
+        "subentry_id": "sub_bat",
+        "title": "Battery",
+        "unique_id": None,
+    }
+
+
+def _array_subentry():
+    return {
+        "data": _ARRAY_DATA,
+        "subentry_type": ARRAY_SUBENTRY_TYPE,
+        "subentry_id": "sub_arr",
+        "title": "Roof",
+        "unique_id": None,
+    }
+
+
+async def test_maximize_export_respects_min_soc(hass):
+    """An empty battery is not discharged in maximize_export mode."""
+    entry = _make_entry(
+        control_mode="maximize_export",
+        subentries_data=(_battery_subentry(battery_soc_sensor="sensor.battery_soc"),),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _set_state(hass, "sensor.battery_soc", 8)  # below default min_soc 10
+    _set_grid(hass, 0, 0)
+
+    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()):
+        result = await coordinator._async_update_data()
+
+    assert result.battery_setpoints.get("Battery") == 0.0, (
+        "maximize_export must not discharge a battery at/below min SoC"
+    )
+
+
+async def test_maximize_import_respects_max_soc(hass):
+    """A full battery is not charged in maximize_import mode."""
+    entry = _make_entry(
+        control_mode="maximize_import",
+        subentries_data=(_battery_subentry(battery_soc_sensor="sensor.battery_soc"),),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+    _set_state(hass, "sensor.battery_soc", 97)  # above default max_soc 95
+    _set_grid(hass, 0, 0)
+
+    with patch.object(coordinator._actuators, "write_numeric_entity", new=AsyncMock()):
+        result = await coordinator._async_update_data()
+
+    assert result.battery_setpoints.get("Battery") == 0.0, (
+        "maximize_import must not charge a battery at/above max SoC"
+    )
+
+
+async def test_maximize_export_skips_writes_when_entities_match(hass):
+    """maximize_export does not rewrite actuators that already match the target."""
+    entry = _make_entry(
+        control_mode="maximize_export",
+        subentries_data=(_array_subentry(), _battery_subentry()),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    # Entities already at the maximize targets
+    _set_state(hass, "number.inverter_limit", 100)
+    _set_state(hass, "number.battery_setpoint", 2000)
+    _set_grid(hass, 0, 0)
+
+    with (
+        patch.object(
+            coordinator._actuators, "write_setpoint", new=AsyncMock()
+        ) as mock_sp,
+        patch.object(
+            coordinator._actuators, "write_numeric_entity", new=AsyncMock()
+        ) as mock_num,
+    ):
+        await coordinator._async_update_data()
+
+    mock_sp.assert_not_awaited()
+    mock_num.assert_not_awaited()
+
+
+async def test_maximize_export_reasserts_external_changes(hass):
+    """maximize_export re-writes an actuator that was changed externally."""
+    entry = _make_entry(
+        control_mode="maximize_export",
+        subentries_data=(_array_subentry(),),
+    )
+    entry.add_to_hass(hass)
+    coordinator = ZeroGridCoordinator(hass, entry)
+
+    # Someone moved the limit down outside the controller
+    _set_state(hass, "number.inverter_limit", 40)
+    _set_grid(hass, 0, 0)
+
+    with patch.object(
+        coordinator._actuators, "write_setpoint", new=AsyncMock()
+    ) as mock_sp:
+        await coordinator._async_update_data()
+
+    mock_sp.assert_awaited()
+    assert mock_sp.call_args[0][1] == 100.0

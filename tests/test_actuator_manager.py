@@ -154,7 +154,7 @@ async def test_enter_safe_state_logs_array_write_failure(hass_mock, caplog):
 
     await manager.enter_safe_state([array], [], {})
 
-    assert "Failed to set Array1 to max" in caplog.text
+    assert "Failed to set Array1 to safe state" in caplog.text
 
 
 async def test_enter_safe_state_logs_battery_write_failure(hass_mock, caplog):

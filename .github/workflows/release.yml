@@ -20,6 +20,14 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      # Stamp the tag's version into the ZIP's manifest.json, so what the
+      # Marketplace installs (hacs.json sets zip_release) reports the version
+      # being released. The repository copy is left alone.
+      - name: Stamp the released version into manifest.json
+        run: |
+          sed -i 's/"version": "[^"]*"/"version": "${{ steps.version.outputs.version }}"/' \
+            custom_components/zero_grid_controller/manifest.json
+
       - name: Create release ZIP
         run: |
           cd custom_components/zero_grid_controller/
@@ -62,8 +70,8 @@ jobs:
 
             ---
 
-            ## Installation via HACS
-            Install or update via HACS — the new version will be offered automatically.
+            ## Installation via the Marketplace
+            On Home Assistant 2026.11 or later, install or update through Settings → Marketplace. On 2026.10 and older, use HACS. The new version is offered automatically (checked every 48 hours for repositories added from a link).
 
             ## Manual installation
             Download `zero-grid-controller.zip`, extract and copy `zero_grid_controller/` to your `custom_components/` directory.

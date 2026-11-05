@@ -19,12 +19,16 @@ from .const import (
     CONF_ARRAY_NAME,
     CONF_BATTERY_MAX_CHARGE_W,
     CONF_BATTERY_MAX_DISCHARGE_W,
+    CONF_BATTERY_MAX_SOC,
+    CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_SCHEDULE_SENSOR,
     CONF_BATTERY_SENSOR,
     CONF_BATTERY_SETPOINT_ENTITY,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_CONTROL_MODE,
     CONF_DEADBAND_W,
     CONF_EWM_ALPHA,
+    CONF_FAILSAFE_MODE,
     CONF_GRID_EXPORT_SENSORS,
     CONF_GRID_IMPORT_SENSORS,
     CONF_LOAD_ABSOLUTE_MIN_W,
@@ -46,9 +50,12 @@ from .const import (
     DEFAULT_AGGRESSIVENESS,
     DEFAULT_BATTERY_MAX_CHARGE_W,
     DEFAULT_BATTERY_MAX_DISCHARGE_W,
+    DEFAULT_BATTERY_MAX_SOC,
+    DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_CONTROL_MODE,
     DEFAULT_DEADBAND_W,
     DEFAULT_EWM_ALPHA,
+    DEFAULT_FAILSAFE_MODE,
     DEFAULT_LOAD_DEBOUNCE_S,
     DEFAULT_LOAD_PRIORITY,
     DEFAULT_SETPOINT_MAX,
@@ -59,6 +66,8 @@ from .const import (
     DEFAULT_SWITCH_ON_THRESHOLD_W,
     DEFAULT_W_PER_UNIT,
     DOMAIN,
+    FAILSAFE_MODE_CURTAIL,
+    FAILSAFE_MODE_MAXIMIZE,
     LOAD_SUBENTRY_TYPE,
     LOAD_TYPE_NUMERIC,
     LOAD_TYPE_SWITCH,
@@ -137,6 +146,17 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
                             ControllerMode.MAXIMIZE_IMPORT,
                         ],
                         "translation_key": "control_mode",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_FAILSAFE_MODE,
+                default=defaults.get(CONF_FAILSAFE_MODE, DEFAULT_FAILSAFE_MODE),
+            ): selector(
+                {
+                    "select": {
+                        "options": [FAILSAFE_MODE_MAXIMIZE, FAILSAFE_MODE_CURTAIL],
+                        "translation_key": "failsafe_mode",
                     }
                 }
             ),
@@ -286,10 +306,43 @@ def _battery_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
             vol.Required(
                 CONF_BATTERY_SETPOINT_ENTITY,
+                CONF_BATTERY_SOC_SENSOR,
                 default=defaults.get(CONF_BATTERY_SETPOINT_ENTITY, ""),
             ): selector({"entity": {"domain": ["number", "input_number"]}}),
             vol.Optional(CONF_BATTERY_SCHEDULE_SENSOR): selector(
                 {"entity": {"domain": "sensor", "device_class": "power"}}
+            ),
+            vol.Optional(
+                CONF_BATTERY_SOC_SENSOR,
+                description={
+                    "suggested_value": defaults.get(CONF_BATTERY_SOC_SENSOR) or None
+                },
+            ): selector({"entity": {"domain": "sensor", "device_class": "battery"}}),
+            vol.Optional(
+                CONF_BATTERY_MIN_SOC,
+                default=defaults.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC),
+            ): selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 100,
+                        "step": 1,
+                        "unit_of_measurement": "%",
+                    }
+                }
+            ),
+            vol.Optional(
+                CONF_BATTERY_MAX_SOC,
+                default=defaults.get(CONF_BATTERY_MAX_SOC, DEFAULT_BATTERY_MAX_SOC),
+            ): selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 100,
+                        "step": 1,
+                        "unit_of_measurement": "%",
+                    }
+                }
             ),
         }
     )

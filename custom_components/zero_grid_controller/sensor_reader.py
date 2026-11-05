@@ -12,6 +12,10 @@ class SensorReader(Protocol):
         """Return sensor value as float, or None if unavailable/non-numeric."""
         ...
 
+    def read_power_w(self, entity_id: str) -> float | None:
+        """Return a power sensor value in Watts (unit-converted), or None."""
+        ...
+
     def entity_state(self, entity_id: str) -> str | None:
         """Return entity state string, or None if missing/unavailable/unknown."""
         ...
