@@ -35,7 +35,14 @@ grid_w = consumption − PV_delivered − battery_net
 
 ## Installation
 
-### Via HACS (recommended)
+### Via the Marketplace (recommended, Home Assistant 2026.11+)
+
+1. Open **Settings** → **Marketplace** → **Add from link**.
+2. Enter `https://github.com/bvweerd/Zero-Grid-Controller` and install **Zero Grid Controller**.
+
+Adding a repository from a link needs a GitHub connection (device sign-in, read-only). Installed through HACS before 2026.11? Nothing to do: the installation is migrated automatically.
+
+### Via HACS (2026.10 and older)
 
 1. Open **HACS** → **Integrations** → **⋮** → **Custom repositories**.
 2. Add `https://github.com/bvweerd/Zero-Grid-Controller` as an **Integration**.

@@ -2,6 +2,7 @@
   "domain": "zero_grid_controller",
   "name": "Zero Grid Controller",
   "after_dependencies": ["recorder"],
+  "categories": ["energy.solar_batteries"],
   "codeowners": ["@bvweerd"],
   "config_flow": true,
   "dependencies": [],
