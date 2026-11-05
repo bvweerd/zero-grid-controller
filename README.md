@@ -33,6 +33,7 @@ grid_w = consumption − PV_delivered − battery_net
 
 ---
 
+<!-- ha-marketplace:exclude-start -->
 ## Installation
 
 ### Via the Marketplace (recommended, Home Assistant 2026.11+)
@@ -54,6 +55,8 @@ Adding a repository from a link needs a GitHub connection (device sign-in, read-
 1. Download or clone this repository.
 2. Copy the `custom_components/zero_grid_controller` folder to your `<config>/custom_components/` directory.
 3. Restart Home Assistant.
+
+<!-- ha-marketplace:exclude-end -->
 
 ---
 
